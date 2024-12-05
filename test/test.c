@@ -9,6 +9,7 @@
 #endif
 #define FILENAME "HELLORLD,S"
 #define BUFFER_SIZE 256
+#define DEVICE_NUM 8
 #define SA_DIR 0
 #define SA_READ 0
 #define SA_WRITE 1
@@ -145,14 +146,14 @@ void list_directory()
 
     // Open the directory channel (usually "$")
     c = TO_PETSCII_C('$');
-    error = cbm_open(fd, 8, SA_DIR, &c, 1);
+    error = cbm_open(fd, DEVICE_NUM, SA_DIR, &c, 1);
     check_error("Opening directory");
 
     // Get drive status
-    error = cbm_device_status(fd, 8, status, sizeof(status));
+    error = cbm_device_status(fd, DEVICE_NUM, status, sizeof(status));
     check_error("Reading device status after opening directory");
 
-    cbm_talk(fd, 8, 0);
+    cbm_talk(fd, DEVICE_NUM, 0);
 
     // Read directory entries
     if (cbm_raw_read(fd, buffer, 2) == 2)
@@ -174,11 +175,11 @@ void list_directory()
     cbm_untalk(fd);
 
     // Get drive status
-    error = cbm_device_status(fd, 8, status, sizeof(status));
+    error = cbm_device_status(fd, DEVICE_NUM, status, sizeof(status));
     check_error("Reading device status after directory listing");
 
     // Close the directory
-    error = cbm_close(fd, 8, SA_DIR);
+    error = cbm_close(fd, DEVICE_NUM, SA_DIR);
     check_error("Closing connection");
 }
 
@@ -190,7 +191,7 @@ void read_file(const char* filename)
     size_t filename_len = strlen(filename);
 
     // Open the file for reading
-    error = cbm_open(fd, 8, SA_READ, NULL, 0);
+    error = cbm_open(fd, DEVICE_NUM, SA_READ, NULL, 0);
     check_error("Opening connection");
     bytes_written = cbm_raw_write(fd, filename, filename_len);
     if (bytes_written < 0)
@@ -204,11 +205,11 @@ void read_file(const char* filename)
         clean_exit(1);
     }
     cbm_unlisten(fd);
-    error = cbm_device_status(fd, 8, status, sizeof(status));
+    error = cbm_device_status(fd, DEVICE_NUM, status, sizeof(status));
     check_error("Sending filename");
 
     fprintf(stdout, "\nReading %s:\n", filename);
-    cbm_talk(fd, 8, SA_READ);
+    cbm_talk(fd, DEVICE_NUM, SA_READ);
     // Read file contents in chunks
     while (1) {
         int bytes_read = cbm_raw_read(fd, buffer, sizeof(buffer));
@@ -221,7 +222,7 @@ void read_file(const char* filename)
     cbm_untalk(fd);
 
     // Close the file
-    error = cbm_close(fd, 8, SA_READ);
+    error = cbm_close(fd, DEVICE_NUM, SA_READ);
     check_error("Closing connection");
 }
 
@@ -232,7 +233,7 @@ void write_file(const char* filename, const char* data)
     size_t filename_len = strlen(filename);
 
     // Open the file for writing
-    error = cbm_open(fd, 8, SA_WRITE, NULL, 0);
+    error = cbm_open(fd, DEVICE_NUM, SA_WRITE, NULL, 0);
     check_error("Opening connection");
     bytes_written = cbm_raw_write(fd, filename, filename_len);
     if (bytes_written < 0)
@@ -246,12 +247,12 @@ void write_file(const char* filename, const char* data)
         clean_exit(1);
     }
     cbm_unlisten(fd);
-    error = cbm_device_status(fd, 8, status, sizeof(status));
+    error = cbm_device_status(fd, DEVICE_NUM, status, sizeof(status));
     check_error("Sending filename");
 
     // Write the data
     size_t data_length = strlen(data);
-    cbm_listen(fd, 8, SA_WRITE);
+    cbm_listen(fd, DEVICE_NUM, SA_WRITE);
     bytes_written = cbm_raw_write(fd, (const void*)data, data_length);
     if (bytes_written < 0)
     {
@@ -261,14 +262,14 @@ void write_file(const char* filename, const char* data)
     if ((size_t)bytes_written != data_length) {
         fprintf(stderr, "Error: Only wrote %d of %zu bytes\n", 
                 bytes_written, data_length);
-        error = cbm_device_status(fd, 8, status, sizeof(status));
+        error = cbm_device_status(fd, DEVICE_NUM, status, sizeof(status));
         check_error("Sending file contents to write");
         clean_exit(1);
     }
 
     // Close the file
     cbm_unlisten(fd);
-    error = cbm_close(fd, 8, SA_WRITE);
+    error = cbm_close(fd, DEVICE_NUM, SA_WRITE);
     check_error("Closing connection");
 
     fprintf(stdout, "\nSuccessfully wrote %s\n", filename);
@@ -282,10 +283,10 @@ void run_command(const char* command)
     fprintf(stdout, "\nIssuing command: %s\n", command);
     command_len = strlen(command);
 
-    error = cbm_open(fd, 8, SA_CMD, NULL, 0);
+    error = cbm_open(fd, DEVICE_NUM, SA_CMD, NULL, 0);
     check_error("Opening connection");
 
-    cbm_listen(fd, 8, SA_CMD);
+    cbm_listen(fd, DEVICE_NUM, SA_CMD);
     bytes_written = cbm_raw_write(fd, command, strlen(command));
     if (bytes_written < 0)
     {
@@ -298,7 +299,7 @@ void run_command(const char* command)
     }
     while (1)
     {
-        error = cbm_device_status(fd, 8, status, sizeof(status));
+        error = cbm_device_status(fd, DEVICE_NUM, status, sizeof(status));
         if ((error != 73) || (command[0] != 'N'))
         {
             break;
@@ -311,7 +312,7 @@ void run_command(const char* command)
     check_error("Issuing command");
 
     cbm_unlisten(fd);
-    error = cbm_close(fd, 8, SA_CMD);
+    error = cbm_close(fd, DEVICE_NUM, SA_CMD);
     check_error("Closing connection");
 }
 
