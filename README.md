@@ -1,5 +1,11 @@
 # 1541fs
 
+## Introduction
+
+1541fs provides linux-based filesystem support for physical Commodore disk drives, such as the 1541, allowing the drives to be mounted within linux, and the files accessed natively.
+
+It requires an XUM1541 USB-IEC (or parallel, or IEEE-488) device to connect the drives to the linux machine.
+
 ## Building and running
 
 ### Installiing pre-requisities
@@ -38,4 +44,16 @@ cd 1541fs
 cd test
 make
 ./1541fs-test
+```
+
+If you get this error:
+
+```
+./1541fs-test: error while loading shared libraries: libopencbm.so.0: cannot open shared object file: No such file or directory
+```
+
+You need to export an appropriate LD_LIBRARY_PATH, such as:
+
+```
+export LD_LIBRARY_PATH=/usr/local/lib
 ```
