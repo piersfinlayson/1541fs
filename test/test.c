@@ -153,7 +153,7 @@ void list_directory()
     error = cbm_device_status(fd, DEVICE_NUM, status, sizeof(status));
     check_error("Reading device status after opening directory");
 
-    cbm_talk(fd, DEVICE_NUM, 0);
+    cbm_talk(fd, DEVICE_NUM, SA_DIR);
 
     // Read directory entries
     if (cbm_raw_read(fd, buffer, 2) == 2)
