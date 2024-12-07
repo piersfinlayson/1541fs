@@ -87,31 +87,29 @@ struct cbm_state {
 
 static void *read_dir_from_disk_thread_func(void *vargp);
 
-static int check_drive_status(struct cbm_state *state) {
-    unsigned char status[MAX_ERROR_LENGTH];
+static int check_drive_status(struct cbm_state *cbm) {
     int len;
 
-    len = cbm_exec_command(state->fd, state->drive_num, "I", 1);
+    len = cbm_exec_command(cbm->fd, cbm->drive_num, "I", 1);
     if (len < 0) return -1;
 
-    len = cbm_listen(state->fd, state->drive_num, 15);
+    len = cbm_listen(cbm->fd, cbm->drive_num, 15);
     if (len < 0) return -1;
 
-    len = cbm_raw_read(state->fd, status, sizeof(status));
-    cbm_unlisten(state->fd);
+    len = cbm_raw_read(cbm->fd, cbm->error_buffer, sizeof(cbm->error_buffer));
+    cbm_unlisten(cbm->fd);
 
     if (len < 0) return -1;
-    status[len] = '\0';
+    cbm->error_buffer[len] = '\0';
 
-    strncpy(state->error_buffer, (char *)status, MAX_ERROR_LENGTH - 1);
-    state->error_buffer[MAX_ERROR_LENGTH - 1] = '\0';
+    cbm->error_buffer[MAX_ERROR_LENGTH - 1] = '\0';
 
-    return (status[0] == '0') ? 0 : -1;
+    return ((cbm->error_buffer)[0] == '0') ? 0 : -1;
 }
 
-static void cbm_cleanup(struct cbm_state *state)
+static void cbm_cleanup(struct cbm_state *cbm)
 {
-    cbm_driver_close(state->fd);
+    cbm_driver_close(cbm->fd);
 }
 
 // Updated init function signature for FUSE3
