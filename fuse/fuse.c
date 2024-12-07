@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <assert.h>
 #include <syslog.h>
+#include <signal.h>
 #include <opencbm.h>
 
 #define APP_NAME "1541fs-fuse"
@@ -22,7 +23,7 @@
 #define VERSION 0.1
 #endif
 
-int current_log_level = LOG_INFO;
+int current_log_level = LOG_DEBUG;
 
 #define ERROR(format, ...) \
     if (current_log_level >= LOG_ERR) syslog(LOG_ERR, format, ##__VA_ARGS__)
@@ -69,7 +70,9 @@ struct cbm_dir_entry {
 };
 
 struct cbm_state {
+    struct fuse *fuse;
     int fuse_fh;
+    int fuse_loop;
     int fuse_exited;
     pthread_mutex_t mutex;
     CBM_FILE fd;
@@ -288,6 +291,8 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     int rc = 0;
     int error;
     char c;
+
+    INFO("read_dir_from_disk");
 
     cbm->dir_is_clean = 0;
 
@@ -655,52 +660,145 @@ void init_logging()
     openlog(APP_NAME, LOG_PID | LOG_CONS, LOG_DAEMON);
 }
 
+struct signal_handler_data {
+    struct cbm_state *cbm;
+};
+static struct signal_handler_data shd; 
+
+void handle_signal(int signal)
+{
+    struct cbm_state *cbm = shd.cbm;
+
+    // Try and unmount and destroy fuse
+    // We won't bother to get the mutex, because it may well be locked already
+    // For a similar reason we won't bother locking the mutex
+    // We will free cbm
+    switch (signal)
+    {
+        default:
+            INFO("Exception %d caught - cleaning up", signal);
+            if (cbm != NULL)
+            {
+                if (cbm->fuse != NULL)
+                {
+                    if (cbm->fuse_loop && !cbm->fuse_exited)
+                    {
+                        fuse_exit(cbm->fuse);
+                        cbm->fuse_exited = 1;
+                    }
+                    if (cbm->fuse_fh != -1)
+                    {
+                        fuse_unmount(cbm->fuse);
+                        cbm->fuse_fh = -1;
+                    }
+                    fuse_destroy(cbm->fuse);
+                    cbm->fuse = NULL;
+                }
+                free(cbm);
+                cbm = NULL;
+            }
+            INFO("Exiting after handling signal");
+            exit(1);
+            break;
+    }
+}
+
+void setup_signal_handler()
+{
+    int termination_signals[] = {
+        SIGHUP,   // Hangup detected on controlling terminal or death of controlling process
+        SIGINT,   // Interrupt from keyboard (Ctrl-C)
+        SIGQUIT,  // Quit from keyboard (Ctrl-\), also generates a core dump
+        SIGILL,   // Illegal Instruction
+        SIGABRT,  // Abort signal from abort function
+        SIGFPE,   // Floating-point exception
+        SIGKILL,  // Kill signal (cannot be caught, blocked, or ignored)
+        SIGSEGV,  // Invalid memory reference (segmentation fault)
+        SIGPIPE,  // Broken pipe: write to a pipe with no readers
+        SIGALRM,  // Timer signal from alarm
+        SIGTERM,  // Termination signal
+        SIGUSR1,  // User-defined signal 1 (typically terminates unless specifically handled)
+        SIGUSR2,  // User-defined signal 2 (typically terminates unless specifically handled)
+        SIGBUS,   // Bus error (accessing memory that’s not physically mapped)
+        SIGPOLL,  // Pollable event (Sys V). Synonym for SIGIO
+        SIGPROF,  // Profiling timer expired
+        SIGSYS,   // Bad system call (not implemented)
+        SIGTRAP,  // Trace/breakpoint trap
+        SIGXCPU,  // CPU time limit exceeded
+        SIGXFSZ   // File size limit exceeded
+    };
+    int num_signals = (int)(sizeof(termination_signals)/sizeof(int));
+    for (int ii = 0; ii < num_signals; ii++)
+    {
+        signal(termination_signals[ii], handle_signal);
+    }
+}
+
 int main(int argc, char *argv[])
 {
-    struct cbm_state *cbm = NULL;
-    struct fuse *fuse = NULL;
+    struct cbm_state *cbm;
     struct fuse_cmdline_opts fuse_opts = { 0 };
     int ret = 1;
 
-    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-
-    // First parse custom options
-    if (fuse_opt_parse(&args, &options, option_spec, opt_proc) == -1)
-    {
-        ERROR("Failed to parse options");
-        goto EXIT;
-    }
-
-    // Then let FUSE parse its built-in options
-    if (fuse_parse_cmdline(&args, &fuse_opts) == -1)
-    {
-        ERROR("Failed to parse FUSE options\n");
-        return 1;
-    }
-
+    DEBUG("Allocate private data");
     cbm = calloc(1, sizeof(struct cbm_state));
     if (cbm == NULL)
     {
         ERROR("Failed to allocate memory\n");
         goto EXIT;
     }
+    shd.cbm = cbm;
     cbm->fuse_fh = -1;
+    DEBUG("Private data allocated");
 
-    fuse = fuse_new_30(&args, &cbm_oper, sizeof(cbm_oper), cbm);
-    if (fuse == NULL)
+    DEBUG("Setup signal handler");
+    setup_signal_handler();
+
+    DEBUG("Init fuse arg");
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+
+    // First parse custom options
+    DEBUG("Parse args");
+    if (fuse_opt_parse(&args, &options, option_spec, opt_proc) == -1)
+    {
+        ERROR("Failed to parse options");
+        goto EXIT;
+    }
+    if (mountpoint == NULL)
+    {
+        WARN("No mountpint defined - exiting");
+        printf("No mountpoint defined - exiting\n");
+        goto EXIT;
+    }
+
+    // Then let FUSE parse its built-in options
+    DEBUG("Parse fuse args");
+    if (fuse_parse_cmdline(&args, &fuse_opts) == -1)
+    {
+        ERROR("Failed to parse FUSE options\n");
+        return 1;
+    }
+
+    DEBUG("Fuse new");
+    cbm->fuse = fuse_new_30(&args, &cbm_oper, sizeof(cbm_oper), cbm);
+    if (cbm->fuse == NULL)
     {
         ERROR("Failed to create FUSE object\n");
         goto EXIT;
     }
     
-    cbm->fuse_fh = fuse_mount(fuse, mountpoint);
+    DEBUG("Fuse mount");
+    cbm->fuse_fh = fuse_mount(cbm->fuse, mountpoint);
     if (cbm->fuse_fh == -1)
     {
         ERROR("Failed to mount FUSE filesystem\n");
         goto EXIT;
     }
 
-    ret = fuse_loop(fuse);
+    DEBUG("Fuse loop");
+    cbm->fuse_loop = 1;
+    ret = fuse_loop(cbm->fuse);
+    cbm->fuse_exited = 1;
 
 EXIT:
 
@@ -712,13 +810,15 @@ EXIT:
         if (cbm->fuse_fh != -1)
         {
             DEBUG("Unmount FUSE\n");
-            fuse_unmount(fuse);
+            fuse_unmount(cbm->fuse);
+            cbm->fuse_fh = -1;
         }
 
-        if (!cbm->fuse_exited && (fuse != NULL))
+        if (!cbm->fuse_exited && (cbm->fuse != NULL))
         {
             DEBUG("Destroy fuse\n");
-            fuse_destroy(fuse);
+            fuse_destroy(cbm->fuse);
+            cbm->fuse = NULL;
         }
         DEBUG("Dealloc memory\n");
         free(cbm);
