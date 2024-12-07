@@ -34,7 +34,10 @@ int current_log_level = LOG_DEBUG;
 #define DEBUG(format, ...) \
     if (current_log_level >= LOG_DEBUG) syslog(LOG_DEBUG, format, ##__VA_ARGS__)
 
-#define BUF_INC 256
+#define MIN(a, b)  ((a) < (b) ? (a) : (b))
+#define MAX(a, b)  ((a) > (b) ? (a) : (b))
+
+#define BUF_INC 1024
 #define DEVICE_NUM 8
 
 /*
@@ -91,23 +94,45 @@ struct cbm_state {
 static void *read_dir_from_disk_thread_func(void *vargp);
 
 static int check_drive_status(struct cbm_state *cbm) {
+    int rc;
     int len;
 
-    len = cbm_exec_command(cbm->fd, cbm->drive_num, "I", 1);
-    if (len < 0) return -1;
+#if 0
+    DEBUG("Send command: I");
+    rc = cbm_exec_command(cbm->fd, cbm->drive_num, "I", 1);
+    if (rc < 0)
+    {
+        return -1;
+    }
+#endif
 
-    len = cbm_listen(cbm->fd, cbm->drive_num, 15);
-    if (len < 0) return -1;
-
-    len = cbm_raw_read(cbm->fd, cbm->error_buffer, sizeof(cbm->error_buffer));
+    DEBUG("Talk on channel 15");
+    rc = cbm_talk(cbm->fd, cbm->drive_num, 15);
+    if (rc < 0)
+    {
+        return -1;
+    }
+    len = cbm_raw_read(cbm->fd, cbm->error_buffer, sizeof(cbm->error_buffer)-1);
+#if 0
     cbm_unlisten(cbm->fd);
+#endif
 
-    if (len < 0) return -1;
-    cbm->error_buffer[len] = '\0';
+    // Belt and braces
+    cbm->error_buffer[len] = 0;
+    cbm->error_buffer[MAX_ERROR_LENGTH - 1] = 0;
 
-    cbm->error_buffer[MAX_ERROR_LENGTH - 1] = '\0';
+    DEBUG("Exiting check status: %s", cbm->error_buffer);
 
-    return ((cbm->error_buffer)[0] == '0') ? 0 : -1;
+    rc = -1;
+#define OK_PREFIX "00"
+#define BOOT_PREFIX "73,CBM"
+    if (!strncmp(cbm->error_buffer, OK_PREFIX, strlen(OK_PREFIX)) ||
+        !strncmp(cbm->error_buffer, BOOT_PREFIX, strlen(BOOT_PREFIX)))
+    {
+        rc = 0;
+    }
+
+    return rc;
 }
 
 static void cbm_cleanup(struct cbm_state *cbm)
@@ -124,6 +149,9 @@ static void *cbm_init(struct fuse_conn_info *conn,
     (void)cfg;
     int failed = 0;
 
+    // No need to lock in this function - other functions won't be called til
+    // this function has returned
+    DEBUG("Create mutex");
     if (pthread_mutex_init(&(cbm->mutex), NULL) != 0)
     {
         ERROR("Failed to initialize mutex\n");
@@ -135,12 +163,14 @@ static void *cbm_init(struct fuse_conn_info *conn,
     cbm->total_size = MAX_BLOCKS * BLOCK_SIZE;
     cbm->is_initialized = 0;
     
+    DEBUG("Open XUM1541 driver");
     if (cbm_driver_open(&cbm->fd, 0) != 0) {
         WARN("Failed to open OpenCBM driver\n");
         failed = 1;
         goto EXIT;
     }
     
+    DEBUG("Check drive status");
     if (check_drive_status(cbm) != 0) {
         WARN("Drive not responding: %s\n", cbm->error_buffer);
         cbm_cleanup(cbm);
@@ -152,6 +182,7 @@ static void *cbm_init(struct fuse_conn_info *conn,
 
     // Spawn a thread to read the disk, so it's faster to access this mount
     // later
+    DEBUG("Spawn thread to read dir");
     pthread_t thread_id;
     pthread_create(&thread_id,
                    NULL,
@@ -282,21 +313,52 @@ void remove_trailing_spaces(char *str) {
     str[i + 1] = '\0';
 }
 
+void realloc_dir_entries(struct cbm_state *cbm, int line_count)
+{
+    if (line_count > cbm->num_dir_entries)
+    {
+        // We can't reuse - better free and malloc a new one
+        if (cbm->dir_entries != NULL)
+        {
+            free(cbm->dir_entries);
+            cbm->dir_entries = NULL;
+        }
+        cbm->dir_entries = malloc((size_t)line_count * sizeof(struct cbm_dir_entry));
+        if (cbm->dir_entries != NULL)
+        {
+            cbm->num_dir_entries = line_count;
+        }
+        else
+        {
+            cbm->num_dir_entries = 0;
+            goto EXIT;
+        }
+    }
+    memset(cbm->dir_entries, 0, (size_t)line_count * sizeof(struct cbm_dir_entry));
+
+EXIT:
+
+    return;
+}
+
 static int read_dir_from_disk(struct cbm_state *cbm)
 {
     unsigned int buf_len;
     unsigned int data_len;
     unsigned int pos;
-    char *buffer;
+    char *buffer = NULL;
     int rc = 0;
     int error;
     char c;
+    int line_count = 0;
+    struct cbm_dir_entry *dir_entry = cbm->dir_entries;
 
     INFO("read_dir_from_disk");
 
     cbm->dir_is_clean = 0;
 
     // malloc a buffer to store data read from the disk in
+    DEBUG("Allocate buffer to read in data");
     buf_len = BUF_INC;
     buffer = malloc(buf_len);
     if (buffer == NULL)
@@ -306,6 +368,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     }
 
     // open the directory "file" ($)
+    DEBUG("Open $");
     c = cbm_ascii2petscii_c('$');
     error = cbm_open(cbm->fd, DEVICE_NUM, 0, &c, 1);
     if (error)
@@ -313,116 +376,103 @@ static int read_dir_from_disk(struct cbm_state *cbm)
         rc = -EIO;
         goto EXIT;
     }
+    cbm_talk(cbm->fd, DEVICE_NUM, 0);
 
     // Read in directory listing from the drive
-    char cc[2];
+    DEBUG("Read in directory data");
     pos = 0;
-    cbm_talk(cbm->fd, 8, 0);
-    int line_count = 0;
-    if (cbm_raw_read(cbm->fd, cc, 2) == 2)
+    while (cbm_raw_read(cbm->fd, buffer + pos, 1) == 1)
     {
-        // Ignore those 2 bytes
-        while (cbm_raw_read(cbm->fd, cc, 2) == 2)
+        pos++;
+        if (pos >= buf_len)
         {
-            // Ignore those 2 bytes
-            if (cbm_raw_read(cbm->fd, cc, 2) == 2)
-            {
-                // We now receive a line of directory listing until we read 0
-                line_count++;
-                while (cbm_raw_read(cbm->fd, cc, 1) == 1 && cc[0])
-                {
-                    buffer[pos] = cbm_petscii2ascii_c(cc[0]); 
-                    pos++;
-                    check_realloc_buffer(&buffer, &buf_len, pos);
-                    if (buffer == NULL)
-                    {
-                        rc = -ENOMEM;
-                        goto EXIT;
-                    }
-                }
-                
-                // Separate lines with newline not 0 byte
-                buffer[pos] = '\n';
-                pos++;
-                check_realloc_buffer(&buffer, &buf_len, pos);
-                if (buffer == NULL)
-                {
-                    rc = -ENOMEM;
-                    goto EXIT;
-                }
+            check_realloc_buffer(&buffer, &buf_len, pos);
 
-                // Now continue, to see if there's another line
-            }
         }
-    }
-    data_len = pos;
-
-    // We now have buffer filled with directory data, one line per file, with
-    // newlines between
-    // We also have a count of the number of lines of data.  This will be one
-    // more than the number of files as the last line is number of blocks
-    // free.
-    // (The first line is the disk header, but we include that as a file)
-
-    // Example of directory data
-    //
-    // 0 ."disk name       " id 2a
-    // 1    "hellorld"         seq
-    // 663 blocks free.
-
-    // Next thing to do is create the correct number of directory entries in
-    // our array.  This looks more complicated than it seems because we reuse
-    // existing memory if it exists and is big enough.
-    int new_num_dir_entries = line_count - 1;
-    if (new_num_dir_entries < 0)
-    {
-        // No entries
-        goto EXIT;
-    }
-    if (new_num_dir_entries > cbm->num_dir_entries)
-    {
-        // We can't reuse - better free and malloc a new one
-        if (cbm->dir_entries != NULL)
+        if (buffer == NULL)
         {
-            free(cbm->dir_entries);
-        }
-        cbm->dir_entries = calloc((size_t)new_num_dir_entries, sizeof(struct cbm_dir_entry));
-        if (cbm->dir_entries == NULL)
-        {
+            DEBUG("Out of memory while reading directory");
             rc = -ENOMEM;
             goto EXIT;
         }
     }
-    else
+    data_len = pos;
+    DEBUG("Read %d bytes total directory listing", data_len);
+
+    cbm_untalk(cbm->fd);
+    if (check_drive_status(cbm))
     {
-        // We can reuse the existing memory, first set it to zeros
-        memset(cbm->dir_entries, 0, (size_t)new_num_dir_entries * sizeof(struct cbm_dir_entry));
+        DEBUG("Hit error reading from disk");
+        goto EXIT;
     }
-    cbm->num_dir_entries = new_num_dir_entries;
+    cbm_close(cbm->fd, DEVICE_NUM, 0);
 
-    // Now we need to set up the directory entries 1 by 1.  We do this by, for
-    // each line of data
-    // * reading the file size
-    // * reading the file name
-    // * reading the file type
-    // * filling the cbm_dir_entry structure as appropriate
-    int dir_entry = 0;
-    pos = 0;
-    while (dir_entry < cbm->num_dir_entries)
+    // Estimate how many lines there are - we'll estimate 28 bytes to a line
+#define APPROX_BYTES_IN_DIR_LINE 28
+    int approx_line_count = (int)(data_len / APPROX_BYTES_IN_DIR_LINE + (data_len % APPROX_BYTES_IN_DIR_LINE ? 1 : 0));
+    DEBUG("Approximate number of lines in directory listing: %d", approx_line_count);
+    if (approx_line_count <= 0)
     {
-        // Set up the directory entry
-        struct cbm_dir_entry *entry = cbm->dir_entries + dir_entry;
+        DEBUG("0 lines in directory listing");
+        goto EXIT;
+    }
 
-        // Get file size
-        if ((pos + 1) >= data_len)
+    realloc_dir_entries(cbm, approx_line_count);
+    if (cbm->dir_entries == NULL)
+    {
+        DEBUG("Failed to allocate memory for directory entries");
+        rc = -ENOMEM;
+        goto EXIT;
+    }
+
+    // Note our number of directory entries may be wrong - we'll figure this out
+    // later
+
+    // Check 1st 3 bytes
+    pos = 0;
+    if (data_len < 3)
+    {
+        DEBUG("Fewer than 3 bytes in whole dir listing");
+        goto EXIT;
+    }
+    if ((buffer[0] != 0x1) || (buffer[1] != 0x4) || (buffer[2] != 0x1))
+    {
+        DEBUG("Unexpected first 3 bytes: 0x%x 0x%x 0x%x", buffer[0], buffer[1], buffer[2]);
+        goto EXIT;
+    }
+    pos += 3;
+
+    // Now read lines
+    while (pos < data_len)
+    {
+        // Check if have run out of dir_entries
+        if (cbm->num_dir_entries < (line_count+1))
         {
-            WARN("Ran out of data before finishing processing directory entries");
-            cbm->num_dir_entries = dir_entry;
-            break;
+            INFO("Estimated number of lines in directory incorrectly");
+            realloc_dir_entries(cbm, line_count+1);
+            if (cbm->dir_entries == NULL)
+            {
+                DEBUG("Failed to reallocate memory for directory entries");
+                rc = -ENOMEM;
+                goto EXIT;
+            }
         }
-        entry->num_blocks = (unsigned short)((unsigned char)buffer[pos] | (unsigned char)buffer[pos+1] << 8);
-        entry->filesize = entry->num_blocks * BLOCK_SIZE;
-        pos += 2;
+        
+        // Get the number of blocks for this file
+        if (pos >= (buf_len + 2))
+        {
+            DEBUG("Ran out of data too soon");
+            goto EXIT;
+        }
+        dir_entry->num_blocks = (unsigned short)(buffer[pos++]);
+        // If the 2nd byte is 0x12 that means reverse text - so header
+        // Assume any value below this is high order byte, any value
+        // above this isn't.
+        if (buffer[pos] < 0x12)
+        {
+            dir_entry->num_blocks |= (unsigned short)(buffer[pos++] << 8);
+        }
+        DEBUG("Num blocks: %d", dir_entry->num_blocks);
 
         int filename_started = 0;
         int filename_ended = 0;
@@ -431,37 +481,40 @@ static int read_dir_from_disk(struct cbm_state *cbm)
         int is_footer = 0;
         char suffix[4] = {0, 0, 0, 0};
         int suffix_len = 0;
+
         while ((pos < data_len) && 
-               (buffer[pos != '\n']))
+               (buffer[pos] != 0x1))
         {
             c = buffer[pos];
             if (is_footer)
             {
-                assert(!filename_started);
                 // ignore the footer - just says "blocks free"
+                DEBUG("Footer - ignore");
+                assert(!filename_started);
             }
             else if (!filename_started)
             {
                 assert(!filename_ended);
-                if (c == ' ')
+                if (c == 0x20)
                 {
                     // ignore leading spaces
                 }
-                else if (c == '.')
+                else if (c == 0x12)
                 {
-                    assert(is_footer);
+                    DEBUG("Found header");
                     is_header = 1;
-                    entry->is_header = 1;
+                    dir_entry->is_header = 1;
                 }
                 else if (c == '"')
                 {
+                    DEBUG("Filename started");
                     filename_started = 1;
                 }
                 else if (c == 'b')
                 {
+                    DEBUG("Found footer");
                     assert(!is_header);
                     is_footer = 1;
-
                 }
             }
             else if (!filename_ended)
@@ -469,22 +522,24 @@ static int read_dir_from_disk(struct cbm_state *cbm)
                 assert(!is_footer);
                 if (c == '"')
                 {
+                    DEBUG("Filename ended");
                     filename_ended = 1;
                 }
                 else
                 {
+                    DEBUG("Add char to filename: %c", c);
                     // Any other char just gets added to the filename
                     // We'll cope with trailing spaces when appending the .XXX
                     // suffix
                     // We sade 5 chars for the 4 digit suffix and 1xNULL terminator
                     if (filename_len < (MAX_FILENAME_LEN - 5))
                     {
-                        entry->filename[filename_len] = c;
+                        dir_entry->filename[filename_len] = c;
                         filename_len++;
                     }
                     else
                     {
-                        WARN("Filename is longer than max len - truncated version is: %s", entry->filename);
+                        WARN("Filename is longer than max len - truncated version is: %s", dir_entry->filename);
                     }
                 }
             }
@@ -492,16 +547,18 @@ static int read_dir_from_disk(struct cbm_state *cbm)
             {
                 if (c == ' ')
                 {
+                    DEBUG("End of suffix: %s", suffix);
                     // Suffix has ended - we could match with valid ones, but
                     // we won't bother - instead we'll just add to the
                     // filename
-                    remove_trailing_spaces(entry->filename);
-                    assert(strnlen(entry->filename, MAX_FILENAME_LEN-1) < (MAX_FILENAME_LEN - 5));
-                    entry->filename[filename_len++] = entry->is_header ? ',' : '.';
-                    strncat(entry->filename, suffix, 4);
+                    remove_trailing_spaces(dir_entry->filename);
+                    assert(strnlen(dir_entry->filename, MAX_FILENAME_LEN-1) < (MAX_FILENAME_LEN - 5));
+                    dir_entry->filename[filename_len++] = dir_entry->is_header ? ',' : '.';
+                    strncat(dir_entry->filename, suffix, 4);
                 }
                 else if (suffix_len < 3)
                 {
+                    DEBUG("Add char to suffix: %c", c);
                     suffix[suffix_len++] = c;
                 }
                 else
@@ -519,10 +576,12 @@ static int read_dir_from_disk(struct cbm_state *cbm)
                 assert(suffix_len == 0);
                 if (c == ' ')
                 {
+                    DEBUG("Ignore space after filename and before suffix");
                     // Ignore
                 }
                 else
                 {
+                    DEBUG("First char of suffix: %c", c);
                     suffix[suffix_len++] = c;
                 }
             }
@@ -531,13 +590,24 @@ static int read_dir_from_disk(struct cbm_state *cbm)
             pos++;
         }
 
-        // Move to next directory entry (file)
         dir_entry++;
+        line_count++;
     }
 
+    assert(line_count <= cbm->num_dir_entries);
+    cbm->num_dir_entries = line_count;
     cbm->dir_is_clean = 1;
+    DEBUG("Found %d lines in directory listing", cbm->num_dir_entries);
 
 EXIT:
+
+    DEBUG("Exiting read directory function");
+    DEBUG("Number of directory entries: %d is_clean: %d", cbm->num_dir_entries, cbm->dir_is_clean);
+
+    if (buffer != NULL)
+    {
+        free(buffer);
+    }
 
     return rc;
 
@@ -551,8 +621,11 @@ void *read_dir_from_disk_thread_func(void *vargp)
     assert(vargp != NULL);
     cbm = (struct cbm_state *)vargp;
     
+    pthread_mutex_lock(&(cbm->mutex));
     rc = read_dir_from_disk(cbm);
+    pthread_mutex_unlock(&(cbm->mutex));
     (void)rc; // Ignore RC - nothing we can do and read_dir_from_disk logs
+
 
     return NULL;
 }
