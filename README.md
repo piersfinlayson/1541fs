@@ -11,7 +11,7 @@ It requires an XUM1541 USB-IEC (or parallel, or IEEE-488) device to connect the 
 ### Installiing pre-requisities
 
 ```
-sudo apt -y install build-essential autoconf automake libtool flex libusb-dev libncurses5-dev
+sudo apt -y install build-essential autoconf automake libtool flex libusb-dev libncurses5-dev fuse3 libfuse3-dev
 ```
 
 ### Getting cc65
