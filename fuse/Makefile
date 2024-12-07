@@ -5,7 +5,7 @@ CFLAGS = -Wall -Wextra -Werror -Wpedantic -Wformat=2 -Wformat-truncation \
          -Wcast-qual -Wconversion -Wdouble-promotion -fstack-protector-strong \
          -fPIC -pipe -O2 -g -fdiagnostics-color=always
 LDFLAGS = -Wl,-z,relro,-z,now
-LIBS = -lopencbm -lfuse3
+LIBS = -lopencbm -lfuse3 -lpthread
 
 TARGET = 1541fs-fuse
 SRC = fuse.c

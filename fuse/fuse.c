@@ -417,7 +417,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
             cbm->num_dir_entries = dir_entry;
             break;
         }
-        entry->num_blocks = (unsigned char)buffer[pos] | (unsigned char)buffer[pos+1] << 8;
+        entry->num_blocks = (unsigned short)((unsigned char)buffer[pos] | (unsigned char)buffer[pos+1] << 8);
         entry->filesize = entry->num_blocks * BLOCK_SIZE;
         pos += 2;
 
