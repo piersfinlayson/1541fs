@@ -38,6 +38,14 @@ int current_log_level = LOG_DEBUG;
 #define PATH_FORCE_DISK_REREAD  "force-disk-reread/" // Could use header for this
 #define PATH_FORMAT_DISK        "format-disk"        // Could also use header for this
 
+// What will be read out of format-disk
+#define FORMAT_CONTENTS \
+    "To format a disk write the new disk name followed by the ID to this file.\n" \
+    "The disk name can be a maximum of 16 characters and the ID two digits.\n" \
+    "Separate the two with a comma.  For example:\n" \
+    "my new disk,01"
+
+
 // Various return string prefixes from Commdore DOS
 #define DOS_OK_PREFIX "00"        // OK
 #define DOS_BOOT_PREFIX "73,CBM"  // When drive has just powered up/reset
@@ -122,7 +130,7 @@ struct cbm_dir_entry
     // correct value without reading the entire file, which we won't do.  This
     // may lead to some unexpected behaviour, if this filesize is relied upon
     // when listing then processing files.
-    unsigned long filesize;
+    unsigned int filesize;
 
     // Filename.  We use the convention of stripping and trailing spaces
     // from the filename from disk, the appending a suffix, preceeeded by a
@@ -651,7 +659,8 @@ static int read_dir_from_disk(struct cbm_state *cbm)
         {
             dir_entry->num_blocks |= (unsigned short)(buffer[pos++] << 8);
         }
-        DEBUG("Num blocks: %d", dir_entry->num_blocks);
+        dir_entry->filesize = dir_entry->num_blocks * CBM_BLOCK_SIZE;
+        DEBUG("Num blocks: %d, Filesize: %d", dir_entry->num_blocks, dir_entry->filesize);
 
         int filename_started = 0;
         int filename_ended = 0;
@@ -881,6 +890,14 @@ static int cbm_readdir(const char *path,
     };
     for (char *sf = special_files[0]; sf != NULL; sf++)
     {
+        if (!strcmp(sf, PATH_FORMAT_DISK))
+        {
+            stbuf.st_size = strlen(FORMAT_CONTENTS);
+        }
+        else
+        {
+            assert(0);
+        }
         rc = filler(buf, sf, &stbuf, 0, 0);
         if (rc)
         {
@@ -987,6 +1004,7 @@ void cbm_free_channel(struct cbm_state *cbm, int ch)
 
 static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
 {
+    int locked = 0;
     int rc = -1;
     int ch = -1;
 
@@ -1007,6 +1025,9 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         rc = 0;
         goto EXIT;
     }
+
+    pthread_mutex_lock(&(cbm->mutex));
+    locked = 1;
 
     // Check if the directory listing is clean
     if (!cbm->dir_is_clean)
@@ -1070,11 +1091,17 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
 
 EXIT:
 
+    if (locked)
+    {
+        pthread_mutex_lock(&(cbm->mutex));
+    }
+
     return rc;
 }
 
 static int cbm_release(const char *path, struct fuse_file_info *fi)
 {
+    int locked = 0;
     int rc = -1;
     int ch;
     struct cbm_channel *channel;
@@ -1091,6 +1118,9 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
         rc = 0;
         goto EXIT;
     }
+
+    pthread_mutex_lock(&(cbm->mutex));
+    locked = 1;
 
     assert((ch >= 0) && (ch < NUM_CHANNELS));
     channel = cbm->channel+ch;
@@ -1113,6 +1143,106 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
 
 EXIT:
 
+    if (locked)
+    {
+        pthread_mutex_unlock(&(cbm->mutex));
+    }
+
+    return rc;
+}
+
+static struct cbm_dir_entry *cbm_get_dir_entry(struct cbm_state *cbm,
+                                               const char *filename)
+{
+    struct cbm_dir_entry *entry = NULL;
+
+    assert(cbm != NULL);
+    assert(filename != NULL);
+
+    for (int ii = 0; ii < cbm->num_dir_entries; ii++)
+    {
+        if (!strcmp(filename, cbm->dir_entries[ii].filename))
+        {
+            entry = cbm->dir_entries + ii;
+            break;
+        }
+    }
+
+    return entry;
+}
+
+static int cbm_read(const char *path,
+                    char *buf,
+                    size_t size,
+                    off_t offset,
+                    struct fuse_file_info *fi)
+{
+    int locked = 0;
+    int rc = -1;
+    int ch;
+    struct cbm_channel *channel;
+    unsigned int len;
+    struct cbm_dir_entry *entry;
+
+    struct cbm_state *cbm = fuse_get_context()->private_data;
+    assert(cbm != NULL);
+    assert(fi != NULL);
+
+    ch = (int)(fi->fh);
+
+    if (ch == DUMMY_CHANNEL)
+    {
+        if (!strcmp(path+1, PATH_FORMAT_DISK))
+        {
+            len = strlen(FORMAT_CONTENTS);
+            if (offset < len)
+            {
+                if ((long unsigned int)offset + size > len)
+                {
+                    size = len - (long unsigned int)offset;
+                }
+                memcpy(buf, FORMAT_CONTENTS, size);
+            }
+            else
+            {
+                size = 0;
+            }
+            rc = (int)size;
+            goto EXIT;
+
+        }
+    }
+
+    pthread_mutex_lock(&(cbm->mutex));
+    locked = 1;
+
+    assert((ch >= 0) && (ch < NUM_CHANNELS));
+    channel = cbm->channel+ch;
+    assert(!strcmp(path, channel->filename));
+
+    entry = cbm_get_dir_entry(cbm, path);
+    if (entry == NULL)
+    {
+        WARN("Couldn't find file which is apparently open: %s channel %d", path, ch);
+        goto EXIT;
+    }
+    if (entry->is_header)
+    {
+        // We expose a size of 0 for the header
+        assert(entry->filesize == 0);
+        size = 0;
+        goto EXIT;
+    }
+
+    // TO DO - actually read in the file
+
+EXIT:
+
+    if (locked)
+    {
+        pthread_mutex_unlock(&(cbm->mutex));
+    }
+
     return rc;
 }
 
@@ -1124,6 +1254,7 @@ static const struct fuse_operations cbm_oper =
     .readdir  = cbm_readdir,
     .open     = cbm_fuseopen,
     .release  = cbm_release,
+    .read     = cbm_read,
 };
 
 static struct options
