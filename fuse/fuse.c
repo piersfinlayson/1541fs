@@ -38,22 +38,9 @@ int current_log_level = LOG_DEBUG;
 #define MAX(a, b)  ((a) > (b) ? (a) : (b))
 
 #define BUF_INC 1024
-#define DEVICE_NUM 8
-
-/*
- * Command line options
- *
- * We can't set default values for the char* fields here because
- * fuse_opt_parse would attempt to free() them when the user specifies
- * different values on the command line.
- */
-static struct options {
-    const char *filename;
-    const char *contents;
-    int show_help;
-} options;
-
-static char *mountpoint; 
+#define DEFAULT_DEVICE_NUM 8
+#define MIN_DEVICE_NUM     8
+#define MAX_DEVICE_NUM     11
 
 #define BLOCK_SIZE 256
 #define TRACK_18_START 17 * 21
@@ -79,7 +66,7 @@ struct cbm_state {
     int fuse_exited;
     pthread_mutex_t mutex;
     CBM_FILE fd;
-    unsigned char drive_num;
+    unsigned char device_num;
 
     unsigned char channel;
     unsigned char error_channel;
@@ -99,7 +86,7 @@ static int check_drive_status(struct cbm_state *cbm) {
 
 #if 0
     DEBUG("Send command: I");
-    rc = cbm_exec_command(cbm->fd, cbm->drive_num, "I", 1);
+    rc = cbm_exec_command(cbm->fd, cbm->device_num, "I", 1);
     if (rc < 0)
     {
         return -1;
@@ -107,7 +94,7 @@ static int check_drive_status(struct cbm_state *cbm) {
 #endif
 
     DEBUG("Talk on channel 15");
-    rc = cbm_talk(cbm->fd, cbm->drive_num, 15);
+    rc = cbm_talk(cbm->fd, cbm->device_num, 15);
     if (rc < 0)
     {
         return -1;
@@ -158,7 +145,6 @@ static void *cbm_init(struct fuse_conn_info *conn,
         return NULL;
     }
 
-    cbm->drive_num = 8;
     cbm->error_channel = 15;
     cbm->total_size = MAX_BLOCKS * BLOCK_SIZE;
     cbm->is_initialized = 0;
@@ -194,7 +180,8 @@ EXIT:
     if (failed)
     {
         pthread_mutex_destroy(&cbm->mutex);
-        ERROR("Mount failed - is the XUM1541 plugged in and the drive turned on?\n");
+        ERROR("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?", cbm->device_num);
+        printf("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?\n", cbm->device_num);
         fuse_exit(fuse_get_context()->fuse);
         cbm->fuse_exited = 1;
         cbm = NULL;
@@ -370,13 +357,13 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     // open the directory "file" ($)
     DEBUG("Open $");
     c = cbm_ascii2petscii_c('$');
-    error = cbm_open(cbm->fd, DEVICE_NUM, 0, &c, 1);
+    error = cbm_open(cbm->fd, cbm->device_num, 0, &c, 1);
     if (error)
     {
         rc = -EIO;
         goto EXIT;
     }
-    cbm_talk(cbm->fd, DEVICE_NUM, 0);
+    cbm_talk(cbm->fd, cbm->device_num, 0);
 
     // Read in directory listing from the drive
     DEBUG("Read in directory data");
@@ -405,7 +392,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
         DEBUG("Hit error reading from disk");
         goto EXIT;
     }
-    cbm_close(cbm->fd, DEVICE_NUM, 0);
+    cbm_close(cbm->fd, cbm->device_num, 0);
 
     // Estimate how many lines there are - we'll estimate 28 bytes to a line
 #define APPROX_BYTES_IN_DIR_LINE 28
@@ -689,12 +676,29 @@ static const struct fuse_operations cbm_oper = {
     .readdir  = cbm_readdir,
 };
 
+/*
+ * Command line options
+ *
+ * We can't set default values for the char* fields here because
+ * fuse_opt_parse would attempt to free() them when the user specifies
+ * different values on the command line.
+ */
+static struct options {
+    char *device_num;
+    int show_help;
+    int show_version;
+} options;
+
+static char *mountpoint; 
+
 #define OPTION(t, p)                           \
     { t, offsetof(struct options, p), 1 }
 
 static const struct fuse_opt option_spec[] = {
-    OPTION("--name=%s", filename),
-    OPTION("--contents=%s", contents),
+    OPTION("-d=%s", device_num),
+    OPTION("--device=%s", device_num),
+    OPTION("--version", show_version),
+    OPTION("-?", show_help),
     OPTION("-h", show_help),
     OPTION("--help", show_help),
     FUSE_OPT_KEY("-f", FUSE_OPT_KEY_KEEP),
@@ -837,12 +841,6 @@ int main(int argc, char *argv[])
         ERROR("Failed to parse options");
         goto EXIT;
     }
-    if (mountpoint == NULL)
-    {
-        WARN("No mountpint defined - exiting");
-        printf("No mountpoint defined - exiting\n");
-        goto EXIT;
-    }
 
     // Then let FUSE parse its built-in options
     DEBUG("Parse fuse args");
@@ -851,6 +849,60 @@ int main(int argc, char *argv[])
         ERROR("Failed to parse FUSE options\n");
         return 1;
     }
+
+    // Now handle our args
+    if (options.show_version)
+    {
+        printf("1541fs-fuse version %s\n", VERSION);
+        ret = 0;
+        goto EXIT;
+    }
+    if (options.show_help)
+    {
+        printf("1541fs-fuse\n");
+        printf("\n");
+        printf("Mounts one or more XUM1541 attached Commodore disk drives as a linux FUSE\nfilesystem.\n");
+        printf("\n");
+        printf("Usage:\n");
+        printf("  1541fs-fuse [options] mountpoint\n");
+        printf("    -d|--device=<device_num=8|9|10|11> - set device number, defaults to 8\n");
+        printf("    -?|-h|--help                       - show help\n");
+        printf("    --version                          - show version\n");
+        ret = 0;
+        goto EXIT;
+    }
+    if (mountpoint == NULL)
+    {
+        WARN("No mountpint defined - exiting");
+        printf("No mountpoint defined - exiting\n");
+        goto EXIT;
+    }
+    if (options.device_num == NULL)
+    {
+        cbm->device_num = DEFAULT_DEVICE_NUM;
+        INFO("No device number specified - defaulting to device 8");
+        printf("No device number specified - defaulting to device 8\n");
+    }
+    else
+    {
+        int device_num = atoi(options.device_num);
+        assert(MIN_DEVICE_NUM >= 0);
+        assert(MIN_DEVICE_NUM < 256);
+        assert(MAX_DEVICE_NUM < 256);
+        if ((device_num < MIN_DEVICE_NUM) || (device_num > MAX_DEVICE_NUM))
+        {
+            WARN("Invalid device number specified: %s", options.device_num);
+            printf("Invalid device number specified: %s\n", options.device_num);
+            goto EXIT;
+        }
+        else
+        {
+            cbm->device_num = (unsigned char)device_num;
+        }
+    }
+    INFO("Using device number: %d", cbm->device_num);
+    printf("Using device number: %d\n", cbm->device_num);
+    fflush(stdout);
 
     DEBUG("Fuse new");
     cbm->fuse = fuse_new_30(&args, &cbm_oper, sizeof(cbm_oper), cbm);
@@ -895,6 +947,7 @@ EXIT:
         }
         DEBUG("Dealloc memory\n");
         free(cbm);
+        shd.cbm = NULL;
     }
 
     return ret;
