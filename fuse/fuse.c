@@ -37,6 +37,10 @@ int current_log_level = LOG_DEBUG;
 #define MIN(a, b)  ((a) < (b) ? (a) : (b))
 #define MAX(a, b)  ((a) > (b) ? (a) : (b))
 
+// Special files and paths
+#define PATH_FORCE_DISK_REREAD  "force-disk-reread/"
+#define PATH_FORMAT_DISK        "format-disk"
+
 #define BUF_INC 1024
 #define DEFAULT_DEVICE_NUM 8
 #define MIN_DEVICE_NUM     8
@@ -727,12 +731,19 @@ static int cbm_readdir(const char *path,
     (void)fi;
     (void)flags;
 
-    if (strcmp(path, "/") != 0) {
+    // Check we support the directory being queried.
+    // For special directories, we ignore the first char of the path (which
+    // should be /, as we don't include in our definition)
+    if ((strcmp(path, "/") != 0) && 
+        (strcmp(path+1, PATH_FORCE_DISK_REREAD)))
+    {
+        DEBUG("Attempt to read non-existant path: %s", path);
         rc = -ENOENT;
         goto EXIT;
     }
 
-    if (!cbm->dir_is_clean)
+    // Re-read the disk if we didn't read cleanly last time
+    if (!cbm->dir_is_clean || (strcmp(path+1, PATH_FORCE_DISK_REREAD)))
     {
         rc = read_dir_from_disk(cbm);
         if (!rc)
@@ -741,18 +752,36 @@ static int cbm_readdir(const char *path,
 
     assert(cbm->dir_is_clean);
 
-    // Add . and .. first
+    // Add any special directories not in dir_entries first
     struct stat stbuf = {0};
     stbuf.st_mode = S_IFDIR;
-    filler(buf, ".", NULL, 0, 0);
-    filler(buf, "..", NULL, 0, 0);
+    char *special_dirs[] = {
+        ".",
+        "..",
+        PATH_FORCE_DISK_REREAD,
+        NULL
+    };
+    for (char *sd = special_dirs[0]; sd != NULL; sd++)
+    {
+        rc = filler(buf, sd, &stbuf, 0, 0);
+        if (rc)
+        {
+            WARN("FUSE filler returned error - directory listing will be truncated");
+            goto EXIT;
+        }
+    }
 
     // Now create an entry for each file
     for (int ii = 0; ii < cbm->num_dir_entries; ii++)
     {
         struct cbm_dir_entry *entry = cbm->dir_entries + ii;
         set_stat(entry, &stbuf);
-        filler(buf, entry->filename, &stbuf, 0, 0);
+        rc = filler(buf, entry->filename, &stbuf, 0, 0);
+        if (rc)
+        {
+            WARN("FUSE filler returned error - directory listing will be truncated");
+            goto EXIT;
+        }
     }
 
 EXIT:
