@@ -1183,10 +1183,12 @@ static int cbm_read(const char *path,
     struct cbm_channel *channel;
     unsigned int len;
     struct cbm_dir_entry *entry;
+    char *temp_buf = NULL;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
+    assert(offset >= 0);
 
     ch = (int)(fi->fh);
 
@@ -1235,8 +1237,62 @@ static int cbm_read(const char *path,
     }
 
     // TO DO - actually read in the file
+    rc = cbm_talk(cbm->fd, cbm->device_num, (unsigned char)ch);
+    if (rc)
+    {
+        rc = check_drive_status(cbm);
+        (void)rc;
+        WARN("Hit error instructing drive to talk, to read file %s channel %d", path, ch);
+        WARN("Drive status: %s", cbm->error_buffer);
+        goto EXIT;
+    }
+
+    // TO DO = store this off in the channel info, so we don't need to read
+    // again if the kernel asks us for more of the file.
+
+    // Allocate temporary buffer to read entire file into
+    len = entry->filesize;
+    temp_buf = malloc(len);
+    if (temp_buf == NULL)
+    {
+        WARN("Failed to malloc buffer to read in file: %s", path);
+        goto EXIT;
+    }
+    rc = cbm_raw_read(cbm->fd, buf, len);
+    if (rc < 0)
+    {
+        rc = check_drive_status(cbm);
+        (void)rc;
+        WARN("Hit error reading file %s channel %d", path, ch);
+        WARN("Drive status: %s", cbm->error_buffer);
+        cbm_untalk(cbm->fd);
+    }
+    else if ((unsigned int)rc < len)
+    {
+        WARN("Couldn't read the whole of file %s channel %d", path, ch);
+        goto EXIT;
+    }
+    if ((unsigned int)offset < len)
+    {
+        if ((long unsigned int)offset + size > len)
+        {
+            size = len - (long unsigned int)offset;
+        }
+        memcpy(buf, temp_buf+offset, size);
+    }
+    else
+    {
+        size = 0;
+    }
+    rc = (int)size;
+    goto EXIT;
 
 EXIT:
+
+    if (temp_buf != NULL)
+    {
+        free(temp_buf);
+    }
 
     if (locked)
     {
