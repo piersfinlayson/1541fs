@@ -788,8 +788,8 @@ static char *mountpoint;
     { t, offsetof(struct options, p), 1 }
 
 static const struct fuse_opt option_spec[] = {
-    OPTION("-d=%s", device_num),
-    OPTION("--device=%s", device_num),
+    OPTION("-d %s", device_num),
+    OPTION("--device %s", device_num),
     OPTION("--version", show_version),
     OPTION("-?", show_help),
     OPTION("-h", show_help),
@@ -951,9 +951,9 @@ int process_args(struct fuse_args *args, struct cbm_state *cbm)
         printf("\n");
         printf("Usage:\n");
         printf("  1541fs-fuse [options] mountpoint\n");
-        printf("    -d|--device=<device_num=8|9|10|11> - set device number, defaults to 8\n");
-        printf("    -?|-h|--help                       - show help\n");
-        printf("    --version                          - show version\n");
+        printf("    -d|--device <device_num=8|9|10|11>  set device number (default: 8)\n");
+        printf("    -?|-h|--help           show help\n");
+        printf("    --version              show version\n");
         fuse_lib_help(args);
         ret = -1;
         goto EXIT;
