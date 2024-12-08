@@ -46,17 +46,50 @@ int current_log_level = LOG_DEBUG;
 #define MIN_DEVICE_NUM     8
 #define MAX_DEVICE_NUM     11
 
+#define NUM_CHANNELS      16
+#define MIN_USER_CHANNEL  2
+#define MAX_USER_CHANNEL  14
+
 #define CBM_BLOCK_SIZE 256
-#define TRACK_18_START 17 * 21
-#define TRACK_18_END 17 * 21 + 19
-#define MAX_BLOCKS (663)
-#define CBM_FILE_NAME "RAWDISK,L,"
-#define RECORD_LEN CBM_BLOCK_SIZE
 #define MAX_ERROR_LENGTH 48
-#define MAX_NUM_FILES 296 + 1 // 296 on 1571/1581, plus 1 for the disk name (which we expose as a special file)
 #define MAX_FILENAME_LEN 16+1+3+1 // 16 chars + 1 for period + 3 for file ending + 1 null terminator
 
-struct cbm_dir_entry {
+enum cbm_channel_usage
+{
+    // Not used
+    USAGE_NONE,
+
+    // Reserved for channel 0
+    USAGE_READ,
+
+    // Reserved for channel 1
+    USAGE_WRITE,
+
+    // Used by channel 15
+    USAGE_CONTROL,
+
+    // Used by other channels (specifically as requested by FUSE)
+    USAGE_OPEN,
+};
+
+struct cbm_channel
+{
+    // Can be between 0 and NUM_CHANNELS-1
+    unsigned char num;
+
+    // Whether this channel has been opened (and not closed)
+    unsigned char open;
+
+    // What this channel is being used for (may be retired if unnecessary)
+    enum cbm_channel_usage usage;
+
+    // If usage is USAGE_OPEN (channels 2-14) and open is 1, stores the file
+    // of the filename opened
+    unsigned char filename[MAX_FILENAME_LEN];
+};
+
+struct cbm_dir_entry
+{
     // Number of blocks on the disk used by this file.  Note that Commodore
     // disk blocks are 256 bytes, whereas FUSE expects to be provided the
     // number of 512 byte blocks, so we need to convert.
@@ -85,7 +118,8 @@ struct cbm_dir_entry {
     unsigned char is_header;
 };
 
-struct cbm_state {
+struct cbm_state
+{
     // FUSE's private data, which we have to provide on every call to FUSE.
     // However, we only access this from with the signal handler - within 
     // a FUSE callback context we access via fuse_get_context()->private_data.
@@ -114,10 +148,6 @@ struct cbm_state {
 
     // Commodore device number for this mount - may be 8, 9, 10 or 11
     unsigned char device_num;
-
-    // Not convinced these are the right way to handle/store channel usage:
-    unsigned char channel;
-    unsigned char error_channel;
 
     // Boolean indicating whether we have opened the OpenCBM driver
     //successfully.
@@ -156,6 +186,16 @@ struct cbm_state {
 
     // Actual directory entires, including special files, excepting . and ..
     struct cbm_dir_entry *dir_entries;
+
+    // Array containing information about all potentially used channels.
+    // Users only need store information about the channels in use if they
+    // will remain unused beyond a mutex lock.  If only used within a mutex 
+    // and they were free before and will remaing free after, they can be used
+    // without updating channels.
+    // However, where channels remaing in use between mutex calls - for
+    // example when instructed to open a channel by FUSE, and then subsequently
+    // read, they must be reserved here. 
+    struct cbm_channel channel[NUM_CHANNELS];
 };
 
 static void *read_dir_from_disk_thread_func(void *vargp);
@@ -226,7 +266,6 @@ static void *cbm_init(struct fuse_conn_info *conn,
         return NULL;
     }
 
-    cbm->error_channel = 15;
     cbm->is_initialized = 0;
     
     DEBUG("Open XUM1541 driver");
@@ -1044,6 +1083,28 @@ EXIT:
     return ret;
 }
 
+struct cbm_state *allocate_private_data(void)
+{
+    // Allocate and zero memory
+    struct cbm_state *cbm = malloc(sizeof(struct cbm_state));
+    if (cbm == NULL)
+    {
+        ERROR("Failed to allocate memory");
+        goto EXIT;
+    }
+    memset(cbm, 0, sizeof(struct cbm_state));
+
+    // Set up channels
+    for (unsigned char ch = 0; ch < NUM_CHANNELS; ch++)
+    {
+        cbm->channel[ch].num = ch;
+    }
+
+EXIT:
+
+    return cbm;
+} 
+
 int main(int argc, char *argv[])
 {
     struct cbm_state *cbm;
@@ -1051,6 +1112,7 @@ int main(int argc, char *argv[])
 
     // Set up first, as the signal handler will need access
     DEBUG("Allocate private data");
+    cbm = allocate_private_data();
     cbm = calloc(1, sizeof(struct cbm_state));
     if (cbm == NULL)
     {
