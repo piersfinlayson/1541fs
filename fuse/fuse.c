@@ -41,6 +41,9 @@ int current_log_level = LOG_DEBUG;
 #define PATH_FORCE_DISK_REREAD  "force-disk-reread/" // Could use header for this
 #define PATH_FORMAT_DISK        "format-disk"        // Could also use header for this
 
+#define DOS_OK_PREFIX "00"
+#define DOS_BOOT_PREFIX "73,CBM"
+
 #define BUF_INC 1024
 #define DEFAULT_DEVICE_NUM 8
 #define MIN_DEVICE_NUM     8
@@ -200,19 +203,39 @@ struct cbm_state
 
 static void *read_dir_from_disk_thread_func(void *vargp);
 
-static int check_drive_status(struct cbm_state *cbm) {
+// Must be called within a mutex lock if called after our fuse _init() function
+// has been called, and before fuse_exit() has been called.
+// Extended version of check_drive_status which will call the specified
+// command (like "UJ" or "I") before issuing the status query.
+// Can be called with cmd == NULL, in which case a command is not issued
+static int check_drive_status_cmd(struct cbm_state *cbm, unsigned char *cmd)
+{
     int rc;
     int len;
 
-#if 0
-    DEBUG("Send command: I");
-    rc = cbm_exec_command(cbm->fd, cbm->device_num, "I", 1);
-    if (rc < 0)
-    {
-        return -1;
-    }
-#endif
+    // We don't currently support users holding channel 15 open - we'll be
+    // done with it before we return
+    assert(!cbm->channel[15].open);
 
+    // Send the command first, if so requested.
+    if (cmd != NULL)
+    {
+        DEBUG("Send command: %s", cmd);
+        // cbm_exec_command performs:
+        // * listen
+        // * raw write of the command using channel 15
+        // * unlisten
+        rc = cbm_exec_command(cbm->fd, cbm->device_num, cmd, 0);
+        if (rc < 0)
+        {
+            return -1;
+        }
+    }
+
+    // Now query the status.  We do this by:
+    // * talk
+    // * raw read on channel 15
+    // * untalk
     DEBUG("Talk on channel 15");
     rc = cbm_talk(cbm->fd, cbm->device_num, 15);
     if (rc < 0)
@@ -220,26 +243,31 @@ static int check_drive_status(struct cbm_state *cbm) {
         return -1;
     }
     len = cbm_raw_read(cbm->fd, cbm->error_buffer, sizeof(cbm->error_buffer)-1);
-#if 0
-    cbm_unlisten(cbm->fd);
-#endif
+    cbm_untalk(cbm->fd);
 
-    // Belt and braces
+    // Belt and braces - ensure string properly NULL terminated
     cbm->error_buffer[len] = 0;
     cbm->error_buffer[MAX_ERROR_LENGTH - 1] = 0;
 
     DEBUG("Exiting check status: %s", cbm->error_buffer);
 
+    // Both 00,OK and 73,CBM ... are OK responses
+    // Anything else is considered an error
     rc = -1;
-#define OK_PREFIX "00"
-#define BOOT_PREFIX "73,CBM"
-    if (!strncmp(cbm->error_buffer, OK_PREFIX, strlen(OK_PREFIX)) ||
-        !strncmp(cbm->error_buffer, BOOT_PREFIX, strlen(BOOT_PREFIX)))
+    if (!strncmp(cbm->error_buffer, DOS_OK_PREFIX, strlen(DOS_OK_PREFIX)) ||
+        !strncmp(cbm->error_buffer, DOS_BOOT_PREFIX, strlen(DOS_BOOT_PREFIX)))
     {
         rc = 0;
     }
 
     return rc;
+} 
+
+// Must be called within a mutex lock if called after our fuse _init() function
+// has been called, and before fuse_exit() has been called.
+static int check_drive_status(struct cbm_state *cbm)
+{
+    return check_drive_status_cmd(cbm, NULL);
 }
 
 static void cbm_cleanup(struct cbm_state *cbm)
@@ -256,9 +284,9 @@ static void *cbm_init(struct fuse_conn_info *conn,
     int failed = 0;
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
+    int rc;
 
-    // No need to lock in this function - other functions won't be called til
-    // this function has returned
+    // Create the mutex
     DEBUG("Create mutex");
     if (pthread_mutex_init(&(cbm->mutex), NULL) != 0)
     {
@@ -275,8 +303,13 @@ static void *cbm_init(struct fuse_conn_info *conn,
         goto EXIT;
     }
     
+    // We don't actually other to lock the mutex here, as no other functions
+    // will be called until this _init() function completes.
+    // pthread_mutex_lock(&(cbm->mutex));
     DEBUG("Check drive status");
-    if (check_drive_status(cbm) != 0) {
+    rc = check_drive_status(cbm);
+    // pthread_mutex_unlock(&(cbm->mutex));
+    if (rc) {
         WARN("Drive status query returned error: %s\n", cbm->error_buffer);
         cbm_cleanup(cbm);
         failed = 1;
