@@ -1034,6 +1034,8 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         WARN("Request to open non-existant file: %s", path);
         goto EXIT;
     }
+
+    // Header is a special case - there's no file to open
     if (entry->is_header)
     {
         DEBUG("Request to open header");
@@ -1042,6 +1044,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         goto EXIT;
     }
 
+    // Allocate a channel to communicate to the drive with
     ch = allocate_free_channel(cbm, USAGE_OPEN, path);
     if (ch < 0)
     {
@@ -1049,6 +1052,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         goto EXIT;
     }
 
+    // Open the file on the disk drive
     rc = cbm_open(cbm->fd, cbm->device_num, (unsigned char)ch, path, strlen(path));
     if (!rc)
     {
