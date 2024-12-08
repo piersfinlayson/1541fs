@@ -38,8 +38,8 @@ int current_log_level = LOG_DEBUG;
 #define MAX(a, b)  ((a) > (b) ? (a) : (b))
 
 // Special files and paths
-#define PATH_FORCE_DISK_REREAD  "force-disk-reread/"
-#define PATH_FORMAT_DISK        "format-disk"
+#define PATH_FORCE_DISK_REREAD  "force-disk-reread/" // Could use header for this
+#define PATH_FORMAT_DISK        "format-disk"        // Could also use header for this
 
 #define BUF_INC 1024
 #define DEFAULT_DEVICE_NUM 8
@@ -764,6 +764,22 @@ static int cbm_readdir(const char *path,
     for (char *sd = special_dirs[0]; sd != NULL; sd++)
     {
         rc = filler(buf, sd, &stbuf, 0, 0);
+        if (rc)
+        {
+            WARN("FUSE filler returned error - directory listing will be truncated");
+            goto EXIT;
+        }
+    }
+
+    // Add any special files
+    stbuf.st_mode = S_IFREG;
+    char *special_files[] = {
+        PATH_FORMAT_DISK,
+        NULL
+    };
+    for (char *sf = special_files[0]; sf != NULL; sf++)
+    {
+        rc = filler(buf, sf, &stbuf, 0, 0);
         if (rc)
         {
             WARN("FUSE filler returned error - directory listing will be truncated");
