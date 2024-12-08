@@ -979,6 +979,29 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         goto EXIT;
     }
 
+    // Lookup the file in dir_entries
+    struct cbm_dir_entry *entry = NULL;
+    for (int ii = 0; ii < cbm->num_dir_entries; ii++)
+    {
+        if (!strcmp(path, cbm->dir_entries[ii].filename))
+        {
+            entry = cbm->dir_entries + ii;
+            break;
+        }
+    }
+    if (entry == NULL)
+    {
+        WARN("Request to open non-existant file: %s", path);
+        goto EXIT;
+    }
+    if (entry->is_header)
+    {
+        DEBUG("Request to open header");
+        fi->fh = DUMMY_CHANNEL;
+        rc = 0;
+        goto EXIT;
+    }
+
     ch = allocate_free_channel(cbm, USAGE_OPEN, path);
     if (ch < 0)
     {
