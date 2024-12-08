@@ -34,33 +34,47 @@ int current_log_level = LOG_DEBUG;
 #define DEBUG(format, ...) \
     if (current_log_level >= LOG_DEBUG) syslog(LOG_DEBUG, format, ##__VA_ARGS__)
 
-#define MIN(a, b)  ((a) < (b) ? (a) : (b))
-#define MAX(a, b)  ((a) > (b) ? (a) : (b))
-
 // Special files and paths
 #define PATH_FORCE_DISK_REREAD  "force-disk-reread/" // Could use header for this
 #define PATH_FORMAT_DISK        "format-disk"        // Could also use header for this
 
-#define DOS_OK_PREFIX "00"
-#define DOS_BOOT_PREFIX "73,CBM"
+// Various return string prefixes from Commdore DOS
+#define DOS_OK_PREFIX "00"        // OK
+#define DOS_BOOT_PREFIX "73,CBM"  // When drive has just powered up/reset
+#define MAX_ERROR_LENGTH 48
 
+// When allocating buffers for reading data, etc, allocate this much memory
+// to being with, and if it's not enough use this as an increment to use to
+// realloc.
 #define BUF_INC 1024
+
+// Commodore disk drive device numbers.
+// Note that these are _device_ numbers, not _drive_ numbers.  Some Commodore
+// disk units have 2 drives (the 2040, 3040, etc).  Those are a different
+// concept, and not currently supported by this program.
 #define DEFAULT_DEVICE_NUM 8
 #define MIN_DEVICE_NUM     8
 #define MAX_DEVICE_NUM     11
 
+// Information about Commodore DOS channels.  There are 16 (0-15).
+// 0, 1 and 15 are special:
+// 0 - read
+// 1 - write
+// 15 - control channel (send commands, or receive status)
+//2-14 inclusive can be used for other purposes.
 #define NUM_CHANNELS      16
 #define MIN_USER_CHANNEL  2
 #define MAX_USER_CHANNEL  14
 #define DUMMY_CHANNEL     16  // Used to access dummy files/directories
 
+// Other information about Commodore disk file sytem and d
 #define CBM_BLOCK_SIZE 256
-#define MAX_ERROR_LENGTH 48
 #define MAX_FILENAME_LEN 16+1+3+1 // 16 chars + 1 for period + 3 for file ending + 1 null terminator
 
+// Valid uses for disk drive channels 
 enum cbm_channel_usage
 {
-    // Not used
+    // Unused
     USAGE_NONE,
 
     // Reserved for channel 0
@@ -76,6 +90,8 @@ enum cbm_channel_usage
     USAGE_OPEN,
 };
 
+// Information about a specific channel to the device, including whether it's
+// open and what for.
 struct cbm_channel
 {
     // Can be between 0 and NUM_CHANNELS-1
@@ -92,6 +108,8 @@ struct cbm_channel
     char filename[MAX_FILENAME_LEN];
 };
 
+// Information about an entry from the disk directory.  May be either a header
+// (disk name,ID), or a file (name.suffix).
 struct cbm_dir_entry
 {
     // Number of blocks on the disk used by this file.  Note that Commodore
@@ -122,6 +140,8 @@ struct cbm_dir_entry
     unsigned char is_header;
 };
 
+// Our FUSE private data.  When called by FUSE, this can be retrieved via
+// fuse_get_context()->private_data. 
 struct cbm_state
 {
     // FUSE's private data, which we have to provide on every call to FUSE.
@@ -202,6 +222,10 @@ struct cbm_state
     struct cbm_channel channel[NUM_CHANNELS];
 };
 
+// Used by our _init() function to kick off a read of the directory listing
+// once the initialization is complete, in a separate thread, so as not to
+// slow down completion of mounting.  However, this aims to ensure we have a
+// listing in hand by the time the user asks for one, to speed up performance
 static void *read_dir_from_disk_thread_func(void *vargp);
 
 // Must be called within a mutex lock if called after our fuse _init() function
@@ -516,6 +540,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     buffer = malloc(buf_len);
     if (buffer == NULL)
     {
+        DEBUG("Failed to allocate memory for buffer to read dir into");
         rc = -ENOMEM;
         goto EXIT;
     }
@@ -526,6 +551,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     error = cbm_open(cbm->fd, cbm->device_num, 0, &c, 1);
     if (error)
     {
+        DEBUG("Open of $ failed");
         rc = -EIO;
         goto EXIT;
     }
@@ -820,7 +846,10 @@ static int cbm_readdir(const char *path,
     {
         rc = read_dir_from_disk(cbm);
         if (!rc)
-        goto EXIT;
+        {
+            DEBUG("Failed to load directory listing");
+            goto EXIT;
+        }
     }
 
     assert(cbm->dir_is_clean);
@@ -979,6 +1008,17 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         goto EXIT;
     }
 
+    // Check if the directory listing is clean
+    if (!cbm->dir_is_clean)
+    {
+        rc = read_dir_from_disk(cbm);
+        if (!rc)
+        {
+            WARN("Failed to load directory listing prior to opening file: %s", path);
+            goto EXIT;
+        }
+    }
+
     // Lookup the file in dir_entries
     struct cbm_dir_entry *entry = NULL;
     for (int ii = 0; ii < cbm->num_dir_entries; ii++)
@@ -1072,7 +1112,8 @@ EXIT:
     return rc;
 }
 
-static const struct fuse_operations cbm_oper = {
+static const struct fuse_operations cbm_oper =
+{
     .init     = cbm_init,
     .destroy  = cbm_destroy,
     .getattr  = cbm_getattr,
@@ -1081,14 +1122,8 @@ static const struct fuse_operations cbm_oper = {
     .release  = cbm_release,
 };
 
-/*
- * Command line options
- *
- * We can't set default values for the char* fields here because
- * fuse_opt_parse would attempt to free() them when the user specifies
- * different values on the command line.
- */
-static struct options {
+static struct options
+{
     char *device_num;
     int show_help;
     int show_version;
@@ -1144,6 +1179,10 @@ void init_logging()
     openlog(APP_NAME, LOG_PID | LOG_CONS, LOG_DAEMON);
 }
 
+// We need to expose cbm to the signal handler so it can cleanup.  We do so
+// via a signal handler struct in order to discourage other functions from
+// accessing cbm this way.  Other functions within the fuse context should
+// get using fuse_get_context()->private_data.
 struct signal_handler_data {
     struct cbm_state *cbm;
 };
