@@ -798,7 +798,8 @@ static const struct fuse_opt option_spec[] = {
     FUSE_OPT_END
 };
 
-// Called by fuse_opt_parse when a non-option argument is found
+// Called by fuse_opt_parse when a non-option (-o) argument is found so we can
+// handle it
 static int opt_proc(void *data,
                     const char *arg,
                     int key,
@@ -825,6 +826,7 @@ static int opt_proc(void *data,
     return 1;
 }
 
+// Set up logging to syslog/messages.
 void init_logging()
 {
     openlog(APP_NAME, LOG_PID | LOG_CONS, LOG_DAEMON);
