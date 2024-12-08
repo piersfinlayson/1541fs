@@ -52,6 +52,7 @@ int current_log_level = LOG_DEBUG;
 #define NUM_CHANNELS      16
 #define MIN_USER_CHANNEL  2
 #define MAX_USER_CHANNEL  14
+#define DUMMY_CHANNEL     16  // Used to access dummy files/directories
 
 #define CBM_BLOCK_SIZE 256
 #define MAX_ERROR_LENGTH 48
@@ -88,7 +89,7 @@ struct cbm_channel
 
     // If usage is USAGE_OPEN (channels 2-14) and open is 1, stores the file
     // of the filename opened
-    unsigned char filename[MAX_FILENAME_LEN];
+    char filename[MAX_FILENAME_LEN];
 };
 
 struct cbm_dir_entry
@@ -879,11 +880,182 @@ EXIT:
     return 0;
 }
 
+static int allocate_free_channel(struct cbm_state *cbm,
+                                 enum cbm_channel_usage usage,
+                                 const char *filename)
+{
+    int min, max;
+    int ch = -1;
+
+    assert(cbm != NULL);
+    assert(usage != USAGE_NONE);
+
+    // Figure out valid channels based on usage
+    switch (usage)
+    {
+        case USAGE_READ:
+            min = 0;
+            max = 0;
+            break;
+
+        case USAGE_WRITE:
+            min = 1;
+            max = 1;
+            break;
+
+        case USAGE_CONTROL:
+            min = 15;
+            max = 15;
+            break;
+
+        case USAGE_OPEN:
+            min = MIN_USER_CHANNEL;
+            max = MAX_USER_CHANNEL;
+            break;
+
+        default:
+            assert(0);
+            goto EXIT;
+            break;
+    }
+
+    // Find a free channel
+    for (ch = min; ch <= max; ch++)
+    {
+        if (!cbm->channel[ch].open)
+        {
+            // Found a free channel
+            break;
+        }
+    }
+
+    if (ch <= max)
+    {
+        // Found a valid channel
+        assert(cbm->channel[ch].num == ch);
+        cbm->channel[ch].open = 1;
+        cbm->channel[ch].usage = usage;
+        strncpy(cbm->channel[ch].filename, filename, MAX_FILENAME_LEN-1);
+    }
+
+EXIT:
+
+    return ch;
+}
+
+// Must not be called with dummy channel!
+void cbm_free_channel(struct cbm_state *cbm, int ch)
+{
+    assert(cbm != NULL);
+    assert((ch >= 0) && (ch < NUM_CHANNELS));
+
+    assert(cbm->channel[ch].num == ch);
+    assert(cbm->channel[ch].open);
+
+    memset(cbm->channel+ch, 0, sizeof(struct cbm_channel));
+    cbm->channel[ch].num = (unsigned char)ch;
+}
+
+static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
+{
+    int rc = -1;
+    int ch = -1;
+
+    struct cbm_state *cbm = fuse_get_context()->private_data;
+    assert(cbm != NULL);
+    assert(fi != NULL);
+
+    if (strlen(path) > (MAX_FILENAME_LEN-1))
+    {
+        WARN("Request to open file with filename exceeding max length failed: %s", path);
+        goto EXIT;
+    }
+
+    if ((!strcmp(path, PATH_FORMAT_DISK)))
+    {
+        DEBUG("Request to open special file: %s", path);
+        fi->fh = DUMMY_CHANNEL;
+        rc = 0;
+        goto EXIT;
+    }
+
+    ch = allocate_free_channel(cbm, USAGE_OPEN, path);
+    if (ch < 0)
+    {
+        WARN("Failed to allocate a free channel to open file: %s", path);
+        goto EXIT;
+    }
+
+    rc = cbm_open(cbm->fd, cbm->device_num, (unsigned char)ch, path, strlen(path));
+    if (!rc)
+    {
+        rc = check_drive_status(cbm);
+        (void)rc;
+        WARN("Failed to open file: %s channel: %d", path, ch);
+        WARN("Drive status: %s", cbm->error_buffer);
+        rc = -1;
+        goto EXIT;
+    }
+    
+    DEBUG("Succeeded in opening file: %s channel: %d", path, ch);
+    fi->fh = (long unsigned int)ch;
+    rc = 0;
+
+EXIT:
+
+    return rc;
+}
+
+static int cbm_release(const char *path, struct fuse_file_info *fi)
+{
+    int rc = -1;
+    int ch;
+    struct cbm_channel *channel;
+
+    struct cbm_state *cbm = fuse_get_context()->private_data;
+    assert(cbm != NULL);
+    assert(fi != NULL);
+
+    ch = (int)(fi->fh);
+
+    if (ch == DUMMY_CHANNEL)
+    {
+        DEBUG("Release for dummy file: %s", path);
+        rc = 0;
+        goto EXIT;
+    }
+
+    assert((ch >= 0) && (ch < NUM_CHANNELS));
+    channel = cbm->channel+ch;
+    assert(!strcmp(path, channel->filename));
+
+    rc = cbm_close(cbm->fd, cbm->device_num, (unsigned char)ch);
+    if (!rc)
+    {
+        rc = check_drive_status(cbm);
+        (void)rc;
+        WARN("Hit error closing channel %d", ch);
+        WARN("Drive status: %s", cbm->error_buffer);
+        rc = -1;
+        goto EXIT;
+    }
+
+    cbm_free_channel(cbm, ch);
+    rc = 0;
+    DEBUG("Release for file: %s channel: %d", path, ch);
+
+EXIT:
+
+    return rc;
+}
+
 static const struct fuse_operations cbm_oper = {
     .init     = cbm_init,
     .destroy  = cbm_destroy,
     .getattr  = cbm_getattr,
     .readdir  = cbm_readdir,
+    .open     = cbm_fuseopen,
+    .release  = cbm_release,
 };
 
 /*
