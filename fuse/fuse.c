@@ -42,12 +42,12 @@ int current_log_level = LOG_DEBUG;
 #define MIN_DEVICE_NUM     8
 #define MAX_DEVICE_NUM     11
 
-#define BLOCK_SIZE 256
+#define CBM_BLOCK_SIZE 256
 #define TRACK_18_START 17 * 21
 #define TRACK_18_END 17 * 21 + 19
 #define MAX_BLOCKS (663)
 #define CBM_FILE_NAME "RAWDISK,L,"
-#define RECORD_LEN BLOCK_SIZE
+#define RECORD_LEN CBM_BLOCK_SIZE
 #define MAX_ERROR_LENGTH 48
 #define MAX_NUM_FILES 296 + 1 // 296 on 1571/1581, plus 1 for the disk name (which we expose as a special file)
 #define MAX_FILENAME_LEN 16+1+3+1 // 16 chars + 1 for period + 3 for file ending + 1 null terminator
@@ -205,12 +205,13 @@ static void cbm_cleanup(struct cbm_state *cbm)
 
 // Updated init function signature for FUSE3
 static void *cbm_init(struct fuse_conn_info *conn,
-                     struct fuse_config *cfg)
+                      struct fuse_config *cfg)
 {
-    struct cbm_state *cbm = fuse_get_context()->private_data;
     (void)conn;
     (void)cfg;
     int failed = 0;
+    struct cbm_state *cbm = fuse_get_context()->private_data;
+    assert(cbm != NULL);
 
     // No need to lock in this function - other functions won't be called til
     // this function has returned
@@ -233,7 +234,7 @@ static void *cbm_init(struct fuse_conn_info *conn,
     
     DEBUG("Check drive status");
     if (check_drive_status(cbm) != 0) {
-        WARN("Drive not responding: %s\n", cbm->error_buffer);
+        WARN("Drive status query returned error: %s\n", cbm->error_buffer);
         cbm_cleanup(cbm);
         failed = 1;
         goto EXIT;
@@ -257,7 +258,9 @@ EXIT:
         pthread_mutex_destroy(&cbm->mutex);
         ERROR("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?", cbm->device_num);
         printf("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?\n", cbm->device_num);
-        fuse_exit(fuse_get_context()->fuse);
+        struct fuse *fuse = fuse_get_context()->fuse;
+        assert(fuse != NULL);
+        fuse_exit(fuse);
         cbm->fuse_exited = 1;
         cbm = NULL;
     }
@@ -269,23 +272,33 @@ EXIT:
 static void cbm_destroy(void *private_data)
 {
     struct cbm_state *cbm = private_data;
+    assert(cbm != NULL);
+
     if (cbm->is_initialized) {
         check_drive_status(cbm); // Clear any pending errors
     }
-    cbm_driver_close(cbm->fd);
+    if (cbm->fd)
+    {
+        cbm_driver_close(cbm->fd);
+    }
+    else
+    {
+        WARN("Unexpectedly found OpenCBM file descriptor was not set");
+    }
+
     pthread_mutex_destroy(&(cbm->mutex));
 }
 
-void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
+static void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
 {
     memset(&stbuf, 0, sizeof(stbuf));
 
     // Num blocks is tricky.  It's supposed to represent the number of
     // 512 byte blocks.  But our filesystem has size 256 blocks.  So we
     // must convert into 512 byte blocks
-    assert(BLOCK_SIZE == 256);
-    stbuf->st_blocks = (int)((entry->filesize + 255) / 256/ 2);
-    stbuf->st_blksize = BLOCK_SIZE;
+    assert(CBM_BLOCK_SIZE == 256);
+    stbuf->st_blocks = (int)((entry->filesize + 255) / 256 / 2);
+    stbuf->st_blksize = CBM_BLOCK_SIZE;
     stbuf->st_size = (int)(entry->filesize);
     if (!entry->is_header)
     {
@@ -309,6 +322,7 @@ static int cbm_getattr(const char *path, struct stat *stbuf,
     int rc = -ENOENT;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
+    assert(cbm != NULL);
 
     pthread_mutex_lock(&(cbm->mutex));
 
@@ -341,7 +355,7 @@ static int cbm_getattr(const char *path, struct stat *stbuf,
     return rc;
 }
 
-void check_realloc_buffer(char **buffer,
+static void check_realloc_buffer(char **buffer,
                           unsigned int *buf_len,
                           const unsigned int pos)
 {
@@ -360,7 +374,7 @@ void check_realloc_buffer(char **buffer,
     }
 }
 
-void remove_trailing_spaces(char *str) {
+static void remove_trailing_spaces(char *str) {
     int len = (int)strlen(str);
     int i;
 
@@ -375,7 +389,7 @@ void remove_trailing_spaces(char *str) {
     str[i + 1] = '\0';
 }
 
-void realloc_dir_entries(struct cbm_state *cbm, int line_count)
+static void realloc_dir_entries(struct cbm_state *cbm, int line_count)
 {
     if (line_count > cbm->num_dir_entries)
     {
@@ -675,19 +689,22 @@ EXIT:
 
 }
 
-void *read_dir_from_disk_thread_func(void *vargp)
+static void *read_dir_from_disk_thread_func(void *vargp)
 {
     struct cbm_state *cbm;
     int rc;
     
     assert(vargp != NULL);
     cbm = (struct cbm_state *)vargp;
-    
+    assert(cbm != NULL);
+
     pthread_mutex_lock(&(cbm->mutex));
     rc = read_dir_from_disk(cbm);
     pthread_mutex_unlock(&(cbm->mutex));
-    (void)rc; // Ignore RC - nothing we can do and read_dir_from_disk logs
 
+    // Ignore the return code - there's nothing we can do here, and 
+    // read_dir_from_disk logs any errors itself 
+    (void)rc;
 
     return NULL;
 }
@@ -702,6 +719,7 @@ static int cbm_readdir(const char *path,
     int rc;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
+    assert(cbm != NULL);
 
     pthread_mutex_lock(&(cbm->mutex));
 
@@ -766,7 +784,7 @@ static struct options {
 
 static char *mountpoint; 
 
-#define OPTION(t, p)                           \
+#define OPTION(t, p) \
     { t, offsetof(struct options, p), 1 }
 
 static const struct fuse_opt option_spec[] = {
@@ -936,6 +954,7 @@ int process_args(struct fuse_args *args, struct cbm_state *cbm)
         printf("    -d|--device=<device_num=8|9|10|11> - set device number, defaults to 8\n");
         printf("    -?|-h|--help                       - show help\n");
         printf("    --version                          - show version\n");
+        fuse_lib_help(args);
         ret = -1;
         goto EXIT;
     }
