@@ -53,9 +53,31 @@ int current_log_level = LOG_DEBUG;
 #define MAX_FILENAME_LEN 16+1+3+1 // 16 chars + 1 for period + 3 for file ending + 1 null terminator
 
 struct cbm_dir_entry {
+    // Number of blocks on the disk used by this file.  Note that Commodore
+    // disk blocks are 256 bytes, whereas FUSE expects to be provided the
+    // number of 512 byte blocks, so we need to convert.
     unsigned short num_blocks;
+
+    // Filesize in bytes.  Technically this isn't correct as it's calculated
+    // by multiplying the number of blocks by 256.  But we wouldn't know the
+    // correct value without reading the entire file, which we won't do.  This
+    // may lead to some unexpected behaviour, if this filesize is relied upon
+    // when listing then processing files.
     unsigned long filesize;
+
+    // Filename.  We use the convention of stripping and trailing spaces
+    // from the filename from disk, the appending a suffix, preceeeded by a
+    // period, indicating the Commodore file type - so .prg .usr .seq .rel
+    // etc.  If the file stored is called test and a PRG file, it'll be
+    // stored and shown as test.prg.  Note that if a file test.prg is stored
+    // as a prg, it will be called test.prg.prg.  Any spaces within the
+    // filename including at the beginning will be retained.
     char filename[MAX_FILENAME_LEN];
+
+    // Indicates whether this is a special file representing the header of
+    // the disk (i.e. the disk name and ID).  These are separated using a
+    // comma, rather than a period, which is a common Commodore convention.
+    // E.g. "scratch disk,01" without the quotes.
     unsigned char is_header;
 };
 
