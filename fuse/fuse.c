@@ -60,21 +60,75 @@ struct cbm_dir_entry {
 };
 
 struct cbm_state {
+    // FUSE's private data, which we have to provide on every call to FUSE.
+    // However, we only access this from with the signal handler - within 
+    // a FUSE callback context we access via fuse_get_context()->private_data.
     struct fuse *fuse;
+
+    // FUSE's file handle for this mount.  We don't use this after receiving
+    // it in response to mounting (unmounting doesn't require it).
     int fuse_fh;
+
+    // Boolean indicating whether we've called fuse_loop yet.
     int fuse_loop;
+
+    // Boolean indicatig whether fuse_exit() has been called.
     int fuse_exited;
+
+    // Protect access to this data with a mutex.  This mutex will not be used/
+    // honoured by the signal handler, if called, nor by the main cleanup code.
+    // In the former case because the signal handler could be called when the 
+    // mutex is held, and in the latter case because all fuse processing should
+    // have exited before the cleanup code is called.  In both cases we want to
+    // avoid blocking due to the mutex lock being held elsewhere. 
     pthread_mutex_t mutex;
+
+    // The file descriptor from opencbm, used for all XUM1541 access
     CBM_FILE fd;
+
+    // Commodore device number for this mount - may be 8, 9, 10 or 11
     unsigned char device_num;
 
+    // Not convinced these are the right way to handle/store channel usage:
     unsigned char channel;
     unsigned char error_channel;
-    size_t total_size;
+
+    // Boolean indicating whether we have opened the OpenCBM driver
+    //successfully.
     int is_initialized;
+
+    // Used to store the last error string the drive.  Examples:
+    // 00,OK,00,00
+    // 73,CBM DOS 1541 v2.6,00,00
+    // etc.  Note may or may not be spaces after commas.
     char error_buffer[MAX_ERROR_LENGTH];
+
+    // Whether we succeeded in doing a successfully read of the floppy disk's
+    // directory last time around - and hence whether the data in dir_entries
+    // is valid.  Can be used to avoid requerying the physical media if we
+    // don't think anything else has changed.
     int dir_is_clean;
+
+    // Number of valid entries in dir_entries - so number of files in the
+    // directory.  This includes any "special" files, like the disk header
+    // which we represent as a file, but not . or .., which are faked by
+    // the _readdir() function, and not stored in dir_entries.  Note there
+    // may be more memory pointed to by dir_entries than num_dir_entries
+    // suggests.  That's OK as if/when we free the OS will take care of
+    // freeing it all.  However we may unnecessary realloc dir_entries if
+    // we subsequently need more (and there was more hiding there than we
+    // expected).  If you want to understand why this is the case read the
+    // code in read_dir_from_disk - but it's essentially because:
+    // * we estimate how many entries there will be before we know and
+    //   allocate memory based on that (which may be an over-estimate)
+    // * and if we subsequently do a directory read and there are fewer files
+    //   we will avoid a reallocation at that point - but num_dir_entries will
+    //   always represent the valid number of dir_entries, not the amount of
+    //   space for them (but there will always be enough space for the number
+    //   specified, or we will re-alloc.
     int num_dir_entries;
+
+    // Actual directory entires, including special files, excepting . and ..
     struct cbm_dir_entry *dir_entries;
 };
 
@@ -146,7 +200,6 @@ static void *cbm_init(struct fuse_conn_info *conn,
     }
 
     cbm->error_channel = 15;
-    cbm->total_size = MAX_BLOCKS * BLOCK_SIZE;
     cbm->is_initialized = 0;
     
     DEBUG("Open XUM1541 driver");
@@ -744,12 +797,20 @@ static struct signal_handler_data shd;
 
 void handle_signal(int signal)
 {
+    // Grab the signal handler data
+    // Technically this isn't thread safe - another thread could be in the
+    // process of accessing this CBM, which is controlled via a contained
+    // mutex.  But we can't help that, as a signal could be caught and handled
+    // while the lock is held.
     struct cbm_state *cbm = shd.cbm;
 
     // Try and unmount and destroy fuse
     // We won't bother to get the mutex, because it may well be locked already
     // For a similar reason we won't bother locking the mutex
     // We will free cbm
+    // Note that there's an extra step here that isn't in the main cleanup
+    // code - we will call fuse_exit.  In main, fuse will already have exited
+    // before the cleanup code is called.
     switch (signal)
     {
         default:
@@ -900,6 +961,7 @@ int main(int argc, char *argv[])
     struct cbm_state *cbm;
     int ret = 1;
 
+    // Set up first, as the signal handler will need access
     DEBUG("Allocate private data");
     cbm = calloc(1, sizeof(struct cbm_state));
     if (cbm == NULL)
@@ -911,14 +973,20 @@ int main(int argc, char *argv[])
     cbm->fuse_fh = -1;
     DEBUG("Private data allocated");
 
+    // Set up next, before anything else happens, so we can gracefully handle
+    // signals
     DEBUG("Setup signal handler");
     setup_signal_handler();
 
+    // Process command line args
     DEBUG("Init fuse arg");
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
     ret = process_args(&args, cbm);
     if (ret)
     {
+        // Return code of -1 means exit, but with 0 return code
+        // Return code of 1 means exit with 1 return code
+        // Return code of 0 means args processed successfully
         if (ret < 0)
         {
             ret = 0;
@@ -926,6 +994,7 @@ int main(int argc, char *argv[])
         goto EXIT;
     }
 
+    // Create a fuse object
     DEBUG("Fuse new");
     cbm->fuse = fuse_new_30(&args, &cbm_oper, sizeof(cbm_oper), cbm);
     if (cbm->fuse == NULL)
@@ -933,7 +1002,14 @@ int main(int argc, char *argv[])
         ERROR("Failed to create FUSE object\n");
         goto EXIT;
     }
-    
+
+    // Attempt the mount - this will call our _init() function, which in turn
+    // will, assuming everything else is OK, will start a thread to do an
+    // immediate directory read, caching it so we are ready to return that
+    // quickly when required.
+    // Any failure in _init() will cause fuse_exit() to be called.  That will
+    // in turn cause the fuse_loop below to exit, meaning we can clean up and
+    // exit.
     DEBUG("Fuse mount");
     cbm->fuse_fh = fuse_mount(cbm->fuse, mountpoint);
     if (cbm->fuse_fh == -1)
@@ -942,6 +1018,8 @@ int main(int argc, char *argv[])
         goto EXIT;
     }
 
+    // Start the main fuse_loop and run forever - or until we hit a fatal
+    // or catch and handle a signal
     DEBUG("Fuse loop");
     cbm->fuse_loop = 1;
     ret = fuse_loop(cbm->fuse);
@@ -952,6 +1030,9 @@ EXIT:
     INFO("Exiting\n");
 
     // Cleanup code
+    // The signal handler has similar processing, in case this isn't run
+    // Note neither this code nor the signal handler attempts to destroy our
+    // mutex, to avoid hanging, or undefied behaviour, if it's locked.
     if (cbm != NULL)
     {
         if (cbm->fuse_fh != -1)
