@@ -811,32 +811,17 @@ void setup_signal_handler()
     }
 }
 
-int main(int argc, char *argv[])
+int process_args(struct fuse_args *args, struct cbm_state *cbm)
 {
-    struct cbm_state *cbm;
-    struct fuse_cmdline_opts fuse_opts = { 0 };
     int ret = 1;
+    struct fuse_cmdline_opts fuse_opts = { 0 };
 
-    DEBUG("Allocate private data");
-    cbm = calloc(1, sizeof(struct cbm_state));
-    if (cbm == NULL)
-    {
-        ERROR("Failed to allocate memory\n");
-        goto EXIT;
-    }
-    shd.cbm = cbm;
-    cbm->fuse_fh = -1;
-    DEBUG("Private data allocated");
-
-    DEBUG("Setup signal handler");
-    setup_signal_handler();
-
-    DEBUG("Init fuse arg");
-    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    assert(args != NULL);
+    assert(cbm != NULL);
 
     // First parse custom options
     DEBUG("Parse args");
-    if (fuse_opt_parse(&args, &options, option_spec, opt_proc) == -1)
+    if (fuse_opt_parse(args, &options, option_spec, opt_proc) == -1)
     {
         ERROR("Failed to parse options");
         goto EXIT;
@@ -844,17 +829,17 @@ int main(int argc, char *argv[])
 
     // Then let FUSE parse its built-in options
     DEBUG("Parse fuse args");
-    if (fuse_parse_cmdline(&args, &fuse_opts) == -1)
+    if (fuse_parse_cmdline(args, &fuse_opts) == -1)
     {
         ERROR("Failed to parse FUSE options\n");
-        return 1;
+        goto EXIT;
     }
 
     // Now handle our args
     if (options.show_version)
     {
         printf("1541fs-fuse version %s\n", VERSION);
-        ret = 0;
+        ret = -1;
         goto EXIT;
     }
     if (options.show_help)
@@ -868,7 +853,7 @@ int main(int argc, char *argv[])
         printf("    -d|--device=<device_num=8|9|10|11> - set device number, defaults to 8\n");
         printf("    -?|-h|--help                       - show help\n");
         printf("    --version                          - show version\n");
-        ret = 0;
+        ret = -1;
         goto EXIT;
     }
     if (mountpoint == NULL)
@@ -881,7 +866,6 @@ int main(int argc, char *argv[])
     {
         cbm->device_num = DEFAULT_DEVICE_NUM;
         INFO("No device number specified - defaulting to device 8");
-        printf("No device number specified - defaulting to device 8\n");
     }
     else
     {
@@ -903,6 +887,44 @@ int main(int argc, char *argv[])
     INFO("Using device number: %d", cbm->device_num);
     printf("Using device number: %d\n", cbm->device_num);
     fflush(stdout);
+
+    ret = 0;
+
+EXIT:
+
+    return ret;
+}
+
+int main(int argc, char *argv[])
+{
+    struct cbm_state *cbm;
+    int ret = 1;
+
+    DEBUG("Allocate private data");
+    cbm = calloc(1, sizeof(struct cbm_state));
+    if (cbm == NULL)
+    {
+        ERROR("Failed to allocate memory\n");
+        goto EXIT;
+    }
+    shd.cbm = cbm;
+    cbm->fuse_fh = -1;
+    DEBUG("Private data allocated");
+
+    DEBUG("Setup signal handler");
+    setup_signal_handler();
+
+    DEBUG("Init fuse arg");
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    ret = process_args(&args, cbm);
+    if (ret)
+    {
+        if (ret < 0)
+        {
+            ret = 0;
+        }
+        goto EXIT;
+    }
 
     DEBUG("Fuse new");
     cbm->fuse = fuse_new_30(&args, &cbm_oper, sizeof(cbm_oper), cbm);
