@@ -57,3 +57,20 @@ You need to export an appropriate LD_LIBRARY_PATH, such as:
 ```
 export LD_LIBRARY_PATH=/usr/local/lib
 ```
+
+If you get this error:
+
+```
+error: cannot query product name: error sending control message: Operation not permitted
+error: no xum1541 device found
+```
+
+It is likely because you need to modify the udev rule OpenCBM installed.  Edit ```/etc/udev/rules.d/45-opencbm-xum1541.rules```.  In this file Tag+="uaccess" means provide access to shells running on the console.  You may not be.
+
+Instead, change the ```TAG_="uaccess"``` to ```USER="username"``` where username is your username.  Then restart udev with:
+
+```
+sudo service udev reload
+```
+
+
