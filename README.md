@@ -73,4 +73,48 @@ Instead, change the ```TAG_="uaccess"``` to ```USER="username"``` where username
 sudo service udev reload
 ```
 
+## Using Windows Subsystem for Linux (WSL)
+
+To use your XUM1541 with WSL, you need to install usbipd.  Use the .msi Installer from here: https://github.com/dorssel/usbipd-win/releases
+
+Once usbipd is installed, attached your XUM1541 to your Windows machine that you are using WSL on.
+
+Then open a Powershell with Administrator privileges.
+
+Run:
+
+```
+usbipd list
+```
+
+You should see an output like this:
+
+```
+Connected:
+BUSID  VID:PID    DEVICE                                                        STATE
+1-3    16d0:0504  xum1541 floppy adapter (ZOOMFLOPPY)                           Attached
+1-7    05c8:03c0  HD Camera                                                     Not shared
+1-10   8087:0aaa  Intel(R) Wireless Bluetooth(R)                                Not shared
+
+Persisted:
+GUID                                  DEVICE
+
+```
+
+Note the bus ID of the XUM1541 - here it is 1-3.  You now need to bind the XUM1541 using the bus ID:
+
+```
+usbipd bind -b 1-3
+```
+
+Now you need to attached the device to WSL, like this, again using the correct bus ID:
+
+```
+usbipd attach --wsl -b 1-3 
+```
+
+If you now run ```sudo dmesg``` on your WSL instance, you should see your XUM1541 appear.
+
+Note there is also an auto-attach option in usbipd (-a|--auto-attach).  This keeps usbipd running in the powershell, so if you unplug and replug the device it should be attached and detached automatically.
+
 
