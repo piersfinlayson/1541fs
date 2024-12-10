@@ -536,7 +536,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     int error;
     char c;
     int line_count = 0;
-    struct cbm_dir_entry *dir_entry = cbm->dir_entries;
+    struct cbm_dir_entry *dir_entry = NULL;
 
     INFO("read_dir_from_disk");
 
@@ -634,6 +634,8 @@ static int read_dir_from_disk(struct cbm_state *cbm)
 
     // Now read lines
     DEBUG("Read lines of listing");
+    dir_entry = cbm->dir_entries;
+    assert(dir_entry != NULL);
     while (pos < data_len)
     {
         DEBUG("Reading line of listing");
@@ -1406,6 +1408,8 @@ void handle_signal(int signal)
     switch (signal)
     {
         default:
+            // TO DO: Consider whether we can safely reset the drive to stop
+            // it spinning (if it is)
             INFO("Exception %d caught - cleaning up", signal);
             if (cbm != NULL)
             {
