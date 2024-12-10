@@ -187,8 +187,12 @@ struct cbm_state
     // Boolean indicating whether we've called fuse_loop yet.
     int fuse_loop;
 
-    // Boolean indicatig whether fuse_exit() has been called.
+    // Boolean indicating whether fuse_exit() has been called.
     int fuse_exited;
+
+    // Boolean indicating whether to force a bus (IEC/IEEE-488) reset before
+    // attempting to mount
+    int force_bus_reset; 
 
     // Protect access to this data with a mutex.  This mutex will not be used/
     // honoured by the signal handler, if called, nor by the main cleanup code.
@@ -357,6 +361,18 @@ static void *cbm_init(struct fuse_conn_info *conn,
         WARN("Failed to open OpenCBM driver\n");
         failed = 1;
         goto EXIT;
+    }
+
+    if (cbm->force_bus_reset)
+    {
+        INFO("Performing bus reset");
+        rc = cbm_reset(cbm->fd);
+        if (rc)
+        {
+            ERROR("Failed to reset bus");
+            failed = 1;
+            goto EXIT;
+        }
     }
     
     // We don't actually other to lock the mutex here, as no other functions
@@ -1486,6 +1502,7 @@ static struct options
     char *device_num;
     int show_help;
     int show_version;
+    int force_bus_reset;
 } options;
 
 static char *mountpoint; 
@@ -1500,6 +1517,8 @@ static const struct fuse_opt option_spec[] = {
     OPTION("-?", show_help),
     OPTION("-h", show_help),
     OPTION("--help", show_help),
+    OPTION("-b", force_bus_reset),
+    OPTION("--bus-reset", force_bus_reset),
     FUSE_OPT_KEY("-f", FUSE_OPT_KEY_KEEP),
     FUSE_OPT_END
 };
@@ -1666,6 +1685,7 @@ int process_args(struct fuse_args *args, struct cbm_state *cbm)
         printf("Usage:\n");
         printf("  1541fs-fuse [options] mountpoint\n");
         printf("    -d|--device <device_num=8|9|10|11>  set device number (default: 8)\n");
+        printf("    -b|--bus-reset         force a bus (IEC/IEEE-488) reset before mount");
         printf("    -?|-h|--help           show help\n");
         printf("    --version              show version\n");
         fuse_lib_help(args);
@@ -1678,6 +1698,7 @@ int process_args(struct fuse_args *args, struct cbm_state *cbm)
         printf("No mountpoint defined - exiting\n");
         goto EXIT;
     }
+    cbm->force_bus_reset = options.force_bus_reset;
     if (options.device_num == NULL)
     {
         cbm->device_num = DEFAULT_DEVICE_NUM;
