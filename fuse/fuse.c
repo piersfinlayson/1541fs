@@ -35,8 +35,8 @@ int current_log_level = LOG_DEBUG;
     if (current_log_level >= LOG_DEBUG) syslog(LOG_DEBUG, format, ##__VA_ARGS__)
 
 // Special files and paths
-#define PATH_FORCE_DISK_REREAD  "force-disk-reread/" // Could use header for this
-#define PATH_FORMAT_DISK        "format-disk"        // Could also use header for this
+#define PATH_FORCE_DISK_REREAD  "force_disk_reread/" // Could use header for this
+#define PATH_FORMAT_DISK        "format_disk"        // Could also use header for this
 
 // What will be read out of format-disk
 #define FORMAT_CONTENTS \
@@ -411,46 +411,62 @@ static void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
     stbuf->st_size = (int)(entry->filesize);
     if (!entry->is_header)
     {
-        stbuf->st_mode |= S_IFREG;
-        stbuf->st_mode |= S_IRUSR; // | S_IWUSR; Don't have write support yet
-        stbuf->st_mode |= S_IRGRP;
+        stbuf->st_mode |= S_IFREG | 0444;
+        //stbuf->st_mode |= S_IRUSR; // | S_IWUSR; Don't have write support yet
+        //stbuf->st_mode |= S_IRGRP;
+        stbuf->st_nlink = 1;
     }
     else
     {
-        stbuf->st_mode |= S_IFDIR;
-        stbuf->st_mode |= S_IRUSR; // | S_IWUSR; Don't have write support yet
-        stbuf->st_mode |= S_IRGRP;
+        stbuf->st_mode |= S_IFDIR | 0444;
+        //stbuf->st_mode |= S_IRUSR; // | S_IWUSR; Don't have write support yet
+        //stbuf->st_mode |= S_IRGRP;
+        stbuf->st_nlink = 2;
     }
+    stbuf->st_uid = 1000;
+    stbuf->st_gid = 1000;
 }
 
 // Updated getattr function signature for FUSE3
-static int cbm_getattr(const char *path, struct stat *stbuf,
-                      struct fuse_file_info *fi)
+static int cbm_getattr(const char *path,
+                       struct stat *stbuf,
+                       struct fuse_file_info *fi)
 {
-    (void)fi;
+    (void)fi; // fi is NULL if file is not open, and may be NULL if file is open
     int rc = -ENOENT;
+    const char *actual_path;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
+    assert(path != NULL);
+    assert(stbuf != NULL);
+
+    DEBUG("ENTRY: cbm_getattr(), path: %s", path);
 
     pthread_mutex_lock(&(cbm->mutex));
 
     memset(stbuf, 0, sizeof(struct stat));
-    
+
+    // This should be safe as path is NULL-terminated.  Hence if strln(path)
+    // == 1, this will point to an empty string.
+    // We do this to skip the leading /
+
     if (strcmp(path, "/") == 0) {
         stbuf->st_mode = S_IFDIR | 0755;
         stbuf->st_nlink = 2;
         rc = 0;
     }
-    else 
+    else if (path[0] == '/')
     {
+        actual_path = path+1;
         // Look for filename in dir_entries
         for (int ii = 0; ii < cbm->num_dir_entries; ii++)
         {
             struct cbm_dir_entry *entry = cbm->dir_entries + ii;
-            if (!strncmp(path, (char*)(entry->filename), MAX_FILENAME_LEN-1))
+            if (!strncmp(actual_path, (char*)(entry->filename), MAX_FILENAME_LEN-1))
             {
                 // Match
+                DEBUG("Matched getattr query with file");
                 set_stat(entry, stbuf);
                 rc = 0;
                 break;
@@ -458,8 +474,14 @@ static int cbm_getattr(const char *path, struct stat *stbuf,
 
         }
     }
+    else
+    {
+        WARN("getattr called with unexpected path: %s", path);
+    }
 
     pthread_mutex_unlock(&(cbm->mutex));
+
+    DEBUG("EXIT: cbm_getattr()");
 
     return rc;
 }
@@ -483,19 +505,23 @@ static void check_realloc_buffer(char **buffer,
     }
 }
 
-static void remove_trailing_spaces(char *str) {
+static int remove_trailing_spaces(char *str) {
     int len = (int)strlen(str);
-    int i;
+    int ii;
 
     // Iterate from the end of the string towards the beginning
-    for (i = len - 1; i >= 0; i--) {
-        if (str[i] != ' ') {
+    for (ii = len - 1; ii >= 0; ii--)
+    {
+        if (str[ii] != ' ')
+        {
             break;
         }
     }
 
     // Terminate the string after the last non-space character
-    str[i + 1] = '\0';
+    str[ii + 1] = '\0';
+
+    return (ii + 1);
 }
 
 static void realloc_dir_entries(struct cbm_state *cbm, int line_count)
@@ -535,7 +561,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     int rc = 0;
     int error;
     char c;
-    int line_count = 0;
+    int line_count;
     struct cbm_dir_entry *dir_entry = NULL;
 
     INFO("read_dir_from_disk");
@@ -636,6 +662,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     DEBUG("Read lines of listing");
     dir_entry = cbm->dir_entries;
     assert(dir_entry != NULL);
+    line_count = 0;
     while (pos < data_len)
     {
         DEBUG("Reading line of listing");
@@ -660,7 +687,8 @@ static int read_dir_from_disk(struct cbm_state *cbm)
             DEBUG("Ran out of data too soon");
             goto EXIT;
         }
-        dir_entry->num_blocks = (unsigned short)(buffer[pos++]);
+        DEBUG("Next 2 bytes for block size: 0x%x 0x%x", (unsigned char)buffer[pos], (unsigned char)buffer[pos+1]);
+        dir_entry->num_blocks = (unsigned char)buffer[pos++];
         // If the 2nd byte is 0x12 that means reverse text - so header
         // Assume any value below this is high order byte, any value
         // above this isn't.
@@ -676,6 +704,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
         int filename_len = 0;
         int is_header = 0;
         int is_footer = 0;
+        int suffix_ended = 0;
         char suffix[4] = {0, 0, 0, 0};
         int suffix_len = 0;
 
@@ -684,11 +713,16 @@ static int read_dir_from_disk(struct cbm_state *cbm)
                (buffer[pos] != 0x1))
         {
             c = buffer[pos];
+            DEBUG("Got byte: 0x%x", c);
             if (is_footer)
             {
                 // ignore the footer - just says "blocks free"
                 DEBUG("Footer - ignore");
                 assert(!filename_started);
+            }
+            else if (suffix_ended)
+            {
+                // ignore any remaining bytes
             }
             else if (!filename_started)
             {
@@ -708,7 +742,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
                     DEBUG("Filename started");
                     filename_started = 1;
                 }
-                else if (c == 'b')
+                else if (c == 0x42) // PETSCII for b
                 {
                     DEBUG("Found footer");
                     assert(!is_header);
@@ -749,10 +783,12 @@ static int read_dir_from_disk(struct cbm_state *cbm)
                     // Suffix has ended - we could match with valid ones, but
                     // we won't bother - instead we'll just add to the
                     // filename
-                    remove_trailing_spaces(dir_entry->filename);
-                    assert(strnlen(dir_entry->filename, MAX_FILENAME_LEN-1) < (MAX_FILENAME_LEN - 5));
-                    dir_entry->filename[filename_len++] = dir_entry->is_header ? ',' : '.';
+                    filename_len = remove_trailing_spaces(dir_entry->filename);
+                    assert(filename_len < (MAX_FILENAME_LEN - 5));
+                    dir_entry->filename[filename_len] = dir_entry->is_header ? ',' : '.';
+                    dir_entry->filename[filename_len+1] = 0;
                     strncat(dir_entry->filename, suffix, 4);
+                    suffix_ended = 1;
                 }
                 else if (suffix_len < 3)
                 {
@@ -788,19 +824,41 @@ static int read_dir_from_disk(struct cbm_state *cbm)
             pos++;
         }
 
-        dir_entry++;
-        line_count++;
+
+        if (!is_footer)
+        {
+            DEBUG("Added directory entry #%d: header %d name %s size %d cbm blocks %d",
+                line_count,
+                dir_entry->is_header,
+                dir_entry->filename,
+                dir_entry->filesize,
+                dir_entry->num_blocks);
+            dir_entry++;
+            line_count++;
+        }
+
+        // Don't add the footer
+        if (pos >= (buf_len + 2))
+        {
+            DEBUG("Not enough data to read another line - exiting line parsing");
+        }
+        // Next two bytes should be 0x1 and 0x1, or 0x0 and 0x0 after footer
+        DEBUG("Skipping next 2 bytes: 0x%d 0x%d", buffer[pos], buffer[pos+1]);
+        pos += 2;
     }
 
     assert(line_count <= cbm->num_dir_entries);
     cbm->num_dir_entries = line_count;
     cbm->dir_is_clean = 1;
-    DEBUG("Found %d lines in directory listing", cbm->num_dir_entries);
+    rc = 0;
 
 EXIT:
 
     DEBUG("Exiting read directory function");
-    DEBUG("Number of directory entries: %d is_clean: %d", cbm->num_dir_entries, cbm->dir_is_clean);
+    if (!rc)
+    {
+        DEBUG("Number of directory entries: %d is_clean: %d", cbm->num_dir_entries, cbm->dir_is_clean);
+    }
 
     if (buffer != NULL)
     {
@@ -849,9 +907,12 @@ static int cbm_readdir(const char *path,
     (void)fi;
     (void)flags;
 
+    DEBUG("ENTRY: cbm_readdir()");
+
     // Check we support the directory being queried.
     // For special directories, we ignore the first char of the path (which
     // should be /, as we don't include in our definition)
+    DEBUG("Check if we support this path: %s", path);
     if ((strcmp(path, "/") != 0) && 
         (strcmp(path+1, PATH_FORCE_DISK_REREAD)))
     {
@@ -861,10 +922,11 @@ static int cbm_readdir(const char *path,
     }
 
     // Re-read the disk if we didn't read cleanly last time
-    if (!cbm->dir_is_clean || (strcmp(path+1, PATH_FORCE_DISK_REREAD)))
+    DEBUG("Check if need to reread directory listing");
+    if (!cbm->dir_is_clean || (!strcmp(path+1, PATH_FORCE_DISK_REREAD)))
     {
         rc = read_dir_from_disk(cbm);
-        if (!rc)
+        if (rc)
         {
             DEBUG("Failed to load directory listing");
             goto EXIT;
@@ -873,17 +935,26 @@ static int cbm_readdir(const char *path,
 
     assert(cbm->dir_is_clean);
 
+goto FILES;
+
     // Add any special directories not in dir_entries first
+    DEBUG("Fill in special directories");
     struct stat stbuf = {0};
+
     stbuf.st_mode = S_IFDIR;
+    stbuf.st_mode |= S_IRUSR;
+    stbuf.st_mode |= S_IRGRP;
     char *special_dirs[] = {
         ".",
         "..",
         PATH_FORCE_DISK_REREAD,
         NULL
     };
-    for (char *sd = special_dirs[0]; sd != NULL; sd++)
+    int ii;
+    char *sd;
+    for (ii = 0, sd = special_dirs[ii]; sd != NULL; ii++, sd = special_dirs[ii])
     {
+        DEBUG("Special dir: %s", sd);
         rc = filler(buf, sd, &stbuf, 0, 0);
         if (rc)
         {
@@ -892,13 +963,18 @@ static int cbm_readdir(const char *path,
         }
     }
 
+
     // Add any special files
+    DEBUG("Fill in special files");
     stbuf.st_mode = S_IFREG;
+    stbuf.st_mode |= S_IRUSR;
+    stbuf.st_mode |= S_IRGRP;
     char *special_files[] = {
         PATH_FORMAT_DISK,
         NULL
     };
-    for (char *sf = special_files[0]; sf != NULL; sf++)
+    char *sf;
+    for (ii = 0, sf = special_files[ii]; sf != NULL; ii++, sf = special_files[ii])
     {
         if (!strcmp(sf, PATH_FORMAT_DISK))
         {
@@ -908,6 +984,7 @@ static int cbm_readdir(const char *path,
         {
             assert(0);
         }
+        DEBUG("Special file: %s", sf);
         rc = filler(buf, sf, &stbuf, 0, 0);
         if (rc)
         {
@@ -916,10 +993,14 @@ static int cbm_readdir(const char *path,
         }
     }
 
+FILES:
+
     // Now create an entry for each file
-    for (int ii = 0; ii < cbm->num_dir_entries; ii++)
+    DEBUG("Add files to directory listing");
+    for (ii = 0; ii < cbm->num_dir_entries; ii++)
     {
         struct cbm_dir_entry *entry = cbm->dir_entries + ii;
+        DEBUG("Regular file: %s", entry->filename);
         set_stat(entry, &stbuf);
         rc = filler(buf, entry->filename, &stbuf, 0, 0);
         if (rc)
@@ -931,7 +1012,9 @@ static int cbm_readdir(const char *path,
 
 EXIT:
 
-    pthread_mutex_destroy(&(cbm->mutex));
+    pthread_mutex_unlock(&(cbm->mutex));
+
+    DEBUG("EXIT:  cbm_readdir()");
 
     return 0;
 }
