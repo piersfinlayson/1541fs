@@ -40,18 +40,18 @@ int current_log_level = LOG_DEBUG;
 
 // Special paths
 // Must not begin or terminate the / or FUSE will barf
-#define PATH_FORCE_DISK_REREAD  "force_disk_reread" // Could use header for this
 const char *special_dirs[] =
 {
     ".",
     "..",
-    PATH_FORCE_DISK_REREAD,
     NULL
 };
 
 // Special files
-#define PATH_FORMAT_DISK        "format_disk"        // Could also use header for this
+#define PATH_FORCE_DISK_REREAD  "disk_reread.cmd" // Could use header for this
+#define PATH_FORMAT_DISK        "format_disk.cmd"       // Could also use header for this
 const char *special_files[] = {
+    PATH_FORCE_DISK_REREAD,
     PATH_FORMAT_DISK,
     NULL,
 };
@@ -826,7 +826,6 @@ static int read_dir_from_disk(struct cbm_state *cbm)
                     DEBUG("Found header");
                     is_header = 1;
                     dir_entry->is_header = 1;
-                    dir_entry->is_dir = 1;
                 }
                 else if (c == '"')
                 {
@@ -1019,7 +1018,7 @@ static int cbm_readdir(const char *path,
     }
 
     // If the path isn't / we return nothing (no files)
-    if (strcmp(path, "/") && strcmp(path+1, PATH_FORCE_DISK_REREAD))
+    if (strcmp(path, "/"))
     {
         DEBUG("Special path, not / - exiting");
         rc = -ENOENT;
@@ -1028,7 +1027,7 @@ static int cbm_readdir(const char *path,
 
     // Re-read the disk if we didn't read cleanly last time
     DEBUG("Check if need to reread directory listing");
-    if (!cbm->dir_is_clean || (!strcmp(path+1, PATH_FORCE_DISK_REREAD)))
+    if (!cbm->dir_is_clean)
     {
         rc = read_dir_from_disk(cbm);
         if (rc)
@@ -1237,6 +1236,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     if (entry == NULL)
     {
         WARN("Request to open non-existant file: %s", path);
+        rc = -ENOENT;
         goto EXIT;
     }
 
