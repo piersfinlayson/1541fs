@@ -596,6 +596,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
 
     // Estimate how many lines there are - we'll estimate 28 bytes to a line
 #define APPROX_BYTES_IN_DIR_LINE 28
+    DEBUG("Calculate appox number of lines in directory listing");
     int approx_line_count = (int)(data_len / APPROX_BYTES_IN_DIR_LINE + (data_len % APPROX_BYTES_IN_DIR_LINE ? 1 : 0));
     DEBUG("Approximate number of lines in directory listing: %d", approx_line_count);
     if (approx_line_count <= 0)
@@ -604,6 +605,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
         goto EXIT;
     }
 
+    DEBUG("Realloc directory entries");
     realloc_dir_entries(cbm, approx_line_count);
     if (cbm->dir_entries == NULL)
     {
@@ -616,6 +618,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     // later
 
     // Check 1st 3 bytes
+    DEBUG("Check 1st 3 bytes of listing");
     pos = 0;
     if (data_len < 3)
     {
@@ -630,8 +633,11 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     pos += 3;
 
     // Now read lines
+    DEBUG("Read lines of listing");
     while (pos < data_len)
     {
+        DEBUG("Reading line of listing");
+
         // Check if have run out of dir_entries
         if (cbm->num_dir_entries < (line_count+1))
         {
@@ -645,6 +651,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
             }
         }
         
+        DEBUG("Get blocks for this file");
         // Get the number of blocks for this file
         if (pos >= (buf_len + 2))
         {
@@ -670,6 +677,7 @@ static int read_dir_from_disk(struct cbm_state *cbm)
         char suffix[4] = {0, 0, 0, 0};
         int suffix_len = 0;
 
+        DEBUG("Read rest of line data");
         while ((pos < data_len) && 
                (buffer[pos] != 0x1))
         {
