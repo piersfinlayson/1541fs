@@ -1202,6 +1202,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     int locked = 0;
     int rc = -1;
     int ch = -1;
+    const char *actual_path;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
@@ -1239,9 +1240,11 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     struct cbm_dir_entry *entry = NULL;
     for (int ii = 0; ii < cbm->num_dir_entries; ii++)
     {
-        if (!strcmp(path, cbm->dir_entries[ii].filename))
+        if (!strcmp(path+1, cbm->dir_entries[ii].filename))
         {
+            DEBUG("Found file");
             entry = cbm->dir_entries + ii;
+            actual_path = path+1;
             break;
         }
     }
@@ -1262,26 +1265,26 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     }
 
     // Allocate a channel to communicate to the drive with
-    ch = allocate_free_channel(cbm, USAGE_OPEN, path);
+    ch = allocate_free_channel(cbm, USAGE_OPEN, actual_path);
     if (ch < 0)
     {
-        WARN("Failed to allocate a free channel to open file: %s", path);
+        WARN("Failed to allocate a free channel to open file: %s", actual_path);
         goto EXIT;
     }
 
     // Open the file on the disk drive
-    rc = cbm_open(cbm->fd, cbm->device_num, (unsigned char)ch, path, strlen(path));
+    rc = cbm_open(cbm->fd, cbm->device_num, (unsigned char)ch, actual_path, strlen(actual_path));
     if (!rc)
     {
         rc = check_drive_status(cbm);
         (void)rc;
-        WARN("Failed to open file: %s channel: %d", path, ch);
+        WARN("Failed to open file: %s channel: %d", actual_path, ch);
         WARN("Drive status: %s", cbm->error_buffer);
         rc = -1;
         goto EXIT;
     }
     
-    DEBUG("Succeeded in opening file: %s channel: %d", path, ch);
+    DEBUG("Succeeded in opening file: %s channel: %d", actual_path, ch);
     fi->fh = (long unsigned int)ch;
     rc = 0;
 
