@@ -13,7 +13,7 @@ OBJ = $(SRC:.c=.o)
 
 # Version info from git
 VERSION = $(shell git describe --always --dirty)
-CPPFLAGS += -DVERSION=\"$(VERSION)\"
+CPPFLAGS += -DVERSION=\"$(VERSION)\" -DDEBUG_BUILD
 
 # Dependencies
 DEPS = $(OBJ:.o=.d)
