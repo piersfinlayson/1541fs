@@ -125,10 +125,10 @@ enum cbm_channel_usage
 struct cbm_channel
 {
     // Can be between 0 and NUM_CHANNELS-1
-    unsigned char num;
+    int num;
 
     // Whether this channel has been opened (and not closed)
-    unsigned char open;
+    int open;
 
     // What this channel is being used for (may be retired if unnecessary)
     enum cbm_channel_usage usage;
@@ -658,8 +658,6 @@ static int read_dir_from_disk(struct cbm_state *cbm)
     int line_count;
     struct cbm_dir_entry *dir_entry = NULL;
 
-    INFO("read_dir_from_disk");
-
     cbm->dir_is_clean = 0;
 
     // malloc a buffer to store data read from the disk in
@@ -1160,23 +1158,30 @@ static int allocate_free_channel(struct cbm_state *cbm,
             break;
     }
 
+    assert((min >= 0) && (min < NUM_CHANNELS));
+    assert((max >= 0) && (max < NUM_CHANNELS));
+    assert(min < max);
+
     // Find a free channel
     for (ch = min; ch <= max; ch++)
     {
         if (!cbm->channel[ch].open)
         {
             // Found a free channel
+            DEBUG("Found a free channel: %d", ch);
+            assert(cbm->channel[ch].num == ch);
+            cbm->channel[ch].open = 1;
+            cbm->channel[ch].usage = usage;
+            assert(strnlen(filename, MAX_FILENAME_LEN) < MAX_FILENAME_LEN);
+            strcpy(cbm->channel[ch].filename, filename);
             break;
         }
     }
 
-    if (ch <= max)
+    if (ch > max)
     {
-        // Found a valid channel
-        assert(cbm->channel[ch].num == ch);
-        cbm->channel[ch].open = 1;
-        cbm->channel[ch].usage = usage;
-        strncpy(cbm->channel[ch].filename, filename, MAX_FILENAME_LEN-1);
+        // Didn't find a valid channel
+        ch = -1;
     }
 
 EXIT:
@@ -1201,8 +1206,10 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
 {
     int locked = 0;
     int rc = -1;
+    int rc2;
     int ch = -1;
-    const char *actual_path;
+    char actual_path[MAX_FILENAME_LEN];
+    char *petscii_path;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
@@ -1244,7 +1251,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         {
             DEBUG("Found file");
             entry = cbm->dir_entries + ii;
-            actual_path = path+1;
+            strcpy(actual_path, path+1);
             break;
         }
     }
@@ -1265,6 +1272,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     }
 
     // Allocate a channel to communicate to the drive with
+    DEBUG("Allocate free channel");
     ch = allocate_free_channel(cbm, USAGE_OPEN, actual_path);
     if (ch < 0)
     {
@@ -1273,13 +1281,16 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     }
 
     // Open the file on the disk drive
-    rc = cbm_open(cbm->fd, cbm->device_num, (unsigned char)ch, actual_path, strlen(actual_path));
-    if (!rc)
+    petscii_path = cbm_petscii2ascii(strtok(actual_path, "."));
+    DEBUG("Open file on disk drive - petscii filename: %s", petscii_path);
+
+    rc = cbm_open(cbm->fd, cbm->device_num, (unsigned char)ch, petscii_path, strlen(petscii_path));
+    if (rc)
     {
-        rc = check_drive_status(cbm);
-        (void)rc;
+        rc2 = check_drive_status(cbm);
+        (void)rc2;
         WARN("Failed to open file: %s channel: %d", actual_path, ch);
-        WARN("Drive status: %s", cbm->error_buffer);
+        WARN("Drive status: %d %s", rc, cbm->error_buffer);
         rc = -1;
         goto EXIT;
     }
@@ -1292,7 +1303,7 @@ EXIT:
 
     if (locked)
     {
-        pthread_mutex_lock(&(cbm->mutex));
+        pthread_mutex_unlock(&(cbm->mutex));
     }
 
     return rc;
@@ -1304,16 +1315,18 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
     int rc = -1;
     int ch;
     struct cbm_channel *channel;
+    const char *actual_path;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
 
     ch = (int)(fi->fh);
+    actual_path = path+1;
 
     if (ch == DUMMY_CHANNEL)
     {
-        DEBUG("Release for dummy file: %s", path);
+        DEBUG("Release for dummy file: %s", actual_path);
         rc = 0;
         goto EXIT;
     }
@@ -1323,7 +1336,12 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
 
     assert((ch >= 0) && (ch < NUM_CHANNELS));
     channel = cbm->channel+ch;
-    assert(!strcmp(path, channel->filename));
+    if (strcmp(actual_path, channel->filename))
+    {
+        DEBUG("Filename provided on release doesn't match that for channel %d", ch);
+        rc = -EBADF;
+        goto EXIT;
+    }
 
     rc = cbm_close(cbm->fd, cbm->device_num, (unsigned char)ch);
     if (!rc)
@@ -1338,7 +1356,7 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
 
     cbm_free_channel(cbm, ch);
     rc = 0;
-    DEBUG("Release for file: %s channel: %d", path, ch);
+    DEBUG("Release for file: %s channel: %d", actual_path, ch);
 
 EXIT:
 
@@ -1383,18 +1401,23 @@ static int cbm_read(const char *path,
     unsigned int len;
     struct cbm_dir_entry *entry;
     char *temp_buf = NULL;
+    const char *actual_path;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
     assert(offset >= 0);
 
+    DEBUG("ENTRY: cbm_read() path %s size: %lu size:%ld", path, size, offset);
+
     ch = (int)(fi->fh);
+
+    actual_path = path+1;
 
     if (ch == DUMMY_CHANNEL)
     {
         DEBUG("Request to read special file");
-        if (!strcmp(path+1, PATH_FORMAT_DISK))
+        if (!strcmp(actual_path, PATH_FORMAT_DISK))
         {
             DEBUG("Request to read " PATH_FORMAT_DISK);
             len = strlen(FORMAT_CONTENTS);
@@ -1408,7 +1431,7 @@ static int cbm_read(const char *path,
             }
             else
             {
-                size = 0;
+                rc = 0;
             }
             rc = (int)size;
             goto EXIT;
@@ -1421,12 +1444,18 @@ static int cbm_read(const char *path,
 
     assert((ch >= 0) && (ch < NUM_CHANNELS));
     channel = cbm->channel+ch;
-    assert(!strcmp(path, channel->filename));
+    if (strcmp(actual_path, channel->filename))
+    {
+        // Channel we've been given doesn't match the filename we opened
+        rc = -EBADF;
+        goto EXIT;
+    }
+    assert(!strcmp(actual_path, channel->filename));
 
-    entry = cbm_get_dir_entry(cbm, path);
+    entry = cbm_get_dir_entry(cbm, actual_path);
     if (entry == NULL)
     {
-        WARN("Couldn't find file which is apparently open: %s channel %d", path, ch);
+        WARN("Couldn't find file which is apparently open: %s channel %d", actual_path, ch);
         rc = -EBADF;
         goto EXIT;
     }
@@ -1434,7 +1463,7 @@ static int cbm_read(const char *path,
     {
         // We expose a size of 0 for the header
         assert(entry->filesize == 0);
-        size = 0;
+        rc = 0;
         goto EXIT;
     }
 
@@ -1444,7 +1473,7 @@ static int cbm_read(const char *path,
     {
         rc = check_drive_status(cbm);
         (void)rc;
-        WARN("Hit error instructing drive to talk, to read file %s channel %d", path, ch);
+        WARN("Hit error instructing drive to talk, to read file %s channel %d", actual_path, ch);
         WARN("Drive status: %s", cbm->error_buffer);
         goto EXIT;
     }
@@ -1457,7 +1486,7 @@ static int cbm_read(const char *path,
     temp_buf = malloc(len);
     if (temp_buf == NULL)
     {
-        WARN("Failed to malloc buffer to read in file: %s", path);
+        WARN("Failed to malloc buffer to read in file: %s", actual_path);
         goto EXIT;
     }
     rc = cbm_raw_read(cbm->fd, buf, len);
@@ -1465,13 +1494,13 @@ static int cbm_read(const char *path,
     {
         rc = check_drive_status(cbm);
         (void)rc;
-        WARN("Hit error reading file %s channel %d", path, ch);
+        WARN("Hit error reading file %s channel %d", actual_path, ch);
         WARN("Drive status: %s", cbm->error_buffer);
         cbm_untalk(cbm->fd);
     }
     else if ((unsigned int)rc < len)
     {
-        WARN("Couldn't read the whole of file %s channel %d", path, ch);
+        WARN("Couldn't read the whole of file %s channel %d", actual_path, ch);
         goto EXIT;
     }
     if ((unsigned int)offset < len)
@@ -1608,7 +1637,8 @@ static int cbm_write(const char *path,
             if (!cbm->dummy_formats)
             {
                 // It's all good - format the disk
-                // TO DO check 15 not open
+                // TO DO check 15 not open properly
+                assert(!cbm->channel[15].open);
                 DEBUG("Formatting disk with cmd: %s", cmd);
                 rc = cbm_open(cbm->fd, cbm->device_num, 15, NULL, 0);
                 if (rc)
@@ -1810,7 +1840,7 @@ void handle_signal(int signal)
         default:
             // TO DO: Consider whether we can safely reset the drive to stop
             // it spinning (if it is)
-            INFO("Exception %d caught - cleaning up", signal);
+            INFO("Signal %d caught - cleaning up", signal);
             if (cbm != NULL)
             {
                 if (cbm->fuse != NULL)
@@ -1969,9 +1999,10 @@ struct cbm_state *allocate_private_data(void)
     memset(cbm, 0, sizeof(struct cbm_state));
 
     // Set up channels
-    for (unsigned char ch = 0; ch < NUM_CHANNELS; ch++)
+    for (int ch = 0; ch < NUM_CHANNELS; ch++)
     {
         cbm->channel[ch].num = ch;
+        DEBUG("Allocated channel: %d", cbm->channel[ch].num);
     }
 
 EXIT:
@@ -1986,13 +2017,13 @@ int main(int argc, char *argv[])
 
     // Set up first, as the signal handler will need access
     DEBUG("Allocate private data");
-    cbm = allocate_private_data();
-    cbm = calloc(1, sizeof(struct cbm_state));
+    cbm = malloc(sizeof(struct cbm_state));
     if (cbm == NULL)
     {
         ERROR("Failed to allocate memory\n");
         goto EXIT;
     }
+    cbm = allocate_private_data();
     shd.cbm = cbm;
     cbm->fuse_fh = -1;
     DEBUG("Private data allocated");
