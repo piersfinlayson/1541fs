@@ -16,6 +16,7 @@
 #include <assert.h>
 #include <syslog.h>
 #include <signal.h>
+#include <time.h>
 #include <opencbm.h>
 
 #define APP_NAME "1541fs-fuse"
@@ -96,6 +97,9 @@ const char *special_files[] = {
 // Other information about Commodore disk file sytem and d
 #define CBM_BLOCK_SIZE 256
 #define MAX_FILENAME_LEN 16+1+3+1 // 16 chars + 1 for period + 3 for file ending + 1 null terminator
+#define MAX_HEADER_LEN   16+1+2+1 // 16 chars + 1 for comma + 2 for ID + 1 null terminator
+#define MAX_FILE_LEN     16
+#define ID_LEN           2
 
 // Valid uses for disk drive channels 
 enum cbm_channel_usage
@@ -164,11 +168,15 @@ struct cbm_dir_entry
     // However, we also use this struct for special_dirs (and files).
     unsigned char is_dir;
 
-    // Indicates whether this is a special file representing the header of
+    // Indicates whether this is a file representing the header of
     // the disk (i.e. the disk name and ID).  These are separated using a
     // comma, rather than a period, which is a common Commodore convention.
     // E.g. "scratch disk,01" without the quotes.
     unsigned char is_header;
+
+    // Indicates wther this is a special file (made up and exposed by 1541fs
+    // in order to provide additional information or functionality
+    unsigned char is_special;
 };
 
 // Our FUSE private data.  When called by FUSE, this can be retrieved via
@@ -192,7 +200,11 @@ struct cbm_state
 
     // Boolean indicating whether to force a bus (IEC/IEEE-488) reset before
     // attempting to mount
-    int force_bus_reset; 
+    int force_bus_reset;
+
+    // Boolean indicating whether to ignore format requests via the special
+    // file
+    int dummy_formats; 
 
     // Protect access to this data with a mutex.  This mutex will not be used/
     // honoured by the signal handler, if called, nor by the main cleanup code.
@@ -451,19 +463,17 @@ static void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
     if (!entry->is_dir)
     {
         stbuf->st_mode |= S_IFREG | 0444;
-        //stbuf->st_mode |= S_IRUSR; // | S_IWUSR; Don't have write support yet
-        //stbuf->st_mode |= S_IRGRP;
         stbuf->st_nlink = 1;
     }
     else
     {
         stbuf->st_mode |= S_IFDIR | 0555;
-        //stbuf->st_mode |= S_IRUSR; // | S_IWUSR; Don't have write support yet
-        //stbuf->st_mode |= S_IRGRP;
         stbuf->st_nlink = 2;
     }
-    //stbuf->st_uid = 1000;
-    //stbuf->st_gid = 1000;
+    if (!entry->is_special)
+    {
+        stbuf->st_atime = stbuf->st_ctime = stbuf->st_mtime = time(NULL);
+    }
 }
 
 int is_special(const char *path, const char **strings)
@@ -536,6 +546,7 @@ static int cbm_getattr(const char *path,
         memset(&entry, 0 , sizeof(entry));
         strncpy(entry.filename, path, MAX_FILENAME_LEN-1);
         entry.is_dir = sdir ? 1 : 0;
+        entry.is_special = 1;
         set_stat(&entry, stbuf);
         rc = 0;
     }
@@ -1045,7 +1056,6 @@ static int cbm_readdir(const char *path,
 
     assert(cbm->dir_is_clean);
 
-
     // Add any special directories not in dir_entries first
     DEBUG("Fill in special directories");
 
@@ -1055,6 +1065,7 @@ static int cbm_readdir(const char *path,
     {
         DEBUG("Special dir: %s", sd);
         memset(&entry, 0, sizeof(entry));
+        entry.is_special = 1;
         strncpy(entry.filename, sd, MAX_FILENAME_LEN-1);
         entry.is_dir = 1;
         set_stat(&entry, &stbuf);
@@ -1074,6 +1085,7 @@ static int cbm_readdir(const char *path,
     for (ii = 0, sf = special_files[ii]; sf != NULL; ii++, sf = special_files[ii])
     {
         memset(&entry, 0, sizeof(entry));
+        entry.is_special = 1;
         strncpy(entry.filename, sf, MAX_FILENAME_LEN-1);
         set_stat(&entry, &stbuf);
         DEBUG("Special file: %s", sf);
@@ -1201,7 +1213,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         goto EXIT;
     }
 
-    if ((!strcmp(path, PATH_FORMAT_DISK)))
+    if (is_special_file(path))
     {
         DEBUG("Request to open special file: %s", path);
         fi->fh = DUMMY_CHANNEL;
@@ -1378,8 +1390,10 @@ static int cbm_read(const char *path,
 
     if (ch == DUMMY_CHANNEL)
     {
+        DEBUG("Request to read special file");
         if (!strcmp(path+1, PATH_FORMAT_DISK))
         {
+            DEBUG("Request to read " PATH_FORMAT_DISK);
             len = strlen(FORMAT_CONTENTS);
             if (offset < len)
             {
@@ -1410,6 +1424,7 @@ static int cbm_read(const char *path,
     if (entry == NULL)
     {
         WARN("Couldn't find file which is apparently open: %s channel %d", path, ch);
+        rc = -EBADF;
         goto EXIT;
     }
     if (entry->is_header)
@@ -1486,6 +1501,207 @@ EXIT:
     return rc;
 }
 
+static int cbm_write(const char *path,
+                     const char *buf,
+                     size_t size,
+                     off_t offset,
+                     struct fuse_file_info *fi)
+{
+    int locked = 0;
+    int rc = -1;
+    int rc2;
+    int ch;
+    struct cbm_channel *channel;
+    unsigned int len;
+    struct cbm_dir_entry *entry;
+    char *temp_buf = NULL;
+
+    struct cbm_state *cbm = fuse_get_context()->private_data;
+    assert(cbm != NULL);
+    assert(fi != NULL);
+    assert(offset >= 0);
+
+    ch = (int)(fi->fh);
+
+    if (ch == DUMMY_CHANNEL)
+    {
+        DEBUG("Request to write special file");
+        if (!strcmp(path+1, PATH_FORMAT_DISK))
+        {
+            DEBUG("Request to write " PATH_FORMAT_DISK " size: %lu offset %ld",
+                  size,
+                  offset);
+            
+            rc = -EIO;
+
+            // See if we have a valid disk name and id like this "diskname,id"
+            
+            // For length, 1 char longer is actually OK if ends with \r or \n
+            if (size > (MAX_HEADER_LEN))
+            {
+                DEBUG("Disk name, ID data too long");
+                goto EXIT;
+            }
+            if (size < 4)
+            {
+                DEBUG("Disk name, ID data too short");
+                goto EXIT;
+            }
+
+            // Buf may not be NULL terminated - turn into a string
+            // By memsetting to 0 and checking size above we can guarantee
+            // this is NULL terminated
+            char header[MAX_HEADER_LEN+1];
+            memset(header, 0, MAX_HEADER_LEN+1);
+            memcpy(header, buf, size);
+            int ii;
+            for (ii = (int)(size-1); ii >= 0; ii--)
+            {
+                if ((header[ii] == '\r') || (header[ii] == '\n'))
+                {
+                    header[ii] = 0;
+                }
+                else
+                {
+                    // Only go as far back as 1st none new line char
+                    break;
+                }
+            }
+
+            char *name;
+            name = strtok(header, ",");
+            if (name == NULL)
+            {
+                DEBUG("Disk name, ID data not properly formatted");
+                goto EXIT;
+            }
+            char *id;
+            id = strtok(NULL, ",");
+            if (id == NULL)
+            {
+                DEBUG("Disk name, ID data not properly formatted");
+                goto EXIT;
+            }
+            if (strtok(NULL, ",") != NULL)
+            {
+                DEBUG("Too much data");
+                goto EXIT;
+            }
+            if (strlen(name) > MAX_FILE_LEN)
+            {
+                DEBUG("Header name too long");
+                goto EXIT;
+            }
+            if (strlen(id) != ID_LEN)
+            {
+                DEBUG("ID not 2 chars long: %lu %s", strlen(id), id);
+                goto EXIT;
+            }
+            char cmd[MAX_HEADER_LEN+3];
+            name = cbm_ascii2petscii(name);
+            id = cbm_ascii2petscii(id);
+            sprintf(cmd, "N0:%s,%s", name, id);
+
+            if (!cbm->dummy_formats)
+            {
+                // It's all good - format the disk
+                // TO DO check 15 not open
+                DEBUG("Formatting disk with cmd: %s", cmd);
+                rc = cbm_open(cbm->fd, cbm->device_num, 15, NULL, 0);
+                if (rc)
+                {
+                    rc2 = check_drive_status(cbm);
+                    (void)rc2;
+                    WARN("Failed to open command channel: %d %s", rc, cbm->error_buffer);
+                    goto EXIT;
+                }
+                cbm_listen(cbm->fd, cbm->device_num, 15);
+                rc = cbm_raw_write(cbm->fd, cmd, strlen(cmd));
+                cbm_unlisten(cbm->fd);
+
+                if (rc != (int)strlen(cmd))
+                {
+                    rc2 = check_drive_status(cbm);
+                    (void)rc2;
+                    DEBUG("Failed to write entire command: %d %s", len, cbm->error_buffer);
+                    rc = -EIO;
+                    goto EXIT;
+                }
+            }
+            else
+            {
+                DEBUG("Pretending to format disk with cmd: %s", cmd);
+            }
+
+            // Force directory reread
+            cbm->dir_is_clean = 0;
+            pthread_t thread_id;
+            pthread_create(&thread_id,
+                           NULL,
+                           read_dir_from_disk_thread_func,
+                           (void *)cbm);
+
+            DEBUG("Format successful");
+            rc = (int)size;
+        }
+        else if (!strcmp(path+1, PATH_FORCE_DISK_REREAD))
+        {
+            // Does't matter what gets written - we'll kick off reread anyway
+            DEBUG("Request to force disk reread");
+            pthread_t thread_id;
+            pthread_create(&thread_id,
+                           NULL,
+                           read_dir_from_disk_thread_func,
+                           (void *)cbm);
+            rc = (int)size;
+        }
+        else 
+        {
+            DEBUG("Unsupported special file");
+            rc = -ENOENT;
+        }
+        goto EXIT;
+    }
+
+    pthread_mutex_lock(&(cbm->mutex));
+    locked = 1;
+
+    assert((ch >= 0) && (ch < NUM_CHANNELS));
+    channel = cbm->channel+ch;
+    assert(!strcmp(path, channel->filename));
+
+    entry = cbm_get_dir_entry(cbm, path);
+    if (entry == NULL)
+    {
+        WARN("Couldn't find file which is apparently open: %s channel %d", path, ch);
+        rc = -EBADF;
+        goto EXIT;
+    }
+    if (entry->is_header)
+    {
+        // Can't write to the header
+        rc = -EROFS;
+        goto EXIT;
+    }
+
+    // TO DO - actually write the file 
+    rc = -ENOTSUP;
+
+EXIT:
+
+    if (temp_buf != NULL)
+    {
+        free(temp_buf);
+    }
+
+    if (locked)
+    {
+        pthread_mutex_unlock(&(cbm->mutex));
+    }
+
+    return rc;
+}
+
 static const struct fuse_operations cbm_oper =
 {
     .init     = cbm_init,
@@ -1495,6 +1711,7 @@ static const struct fuse_operations cbm_oper =
     .open     = cbm_fuseopen,
     .release  = cbm_release,
     .read     = cbm_read,
+    .write    = cbm_write,
 };
 
 static struct options
@@ -1503,6 +1720,7 @@ static struct options
     int show_help;
     int show_version;
     int force_bus_reset;
+    int dummy_formats;
 } options;
 
 static char *mountpoint; 
@@ -1519,6 +1737,8 @@ static const struct fuse_opt option_spec[] = {
     OPTION("--help", show_help),
     OPTION("-b", force_bus_reset),
     OPTION("--bus-reset", force_bus_reset),
+    OPTION("-u", dummy_formats),
+    OPTION("--dummy-formats", dummy_formats),
     FUSE_OPT_KEY("-f", FUSE_OPT_KEY_KEEP),
     FUSE_OPT_END
 };
@@ -1686,6 +1906,7 @@ int process_args(struct fuse_args *args, struct cbm_state *cbm)
         printf("  1541fs-fuse [options] mountpoint\n");
         printf("    -d|--device <device_num=8|9|10|11>  set device number (default: 8)\n");
         printf("    -b|--bus-reset         force a bus (IEC/IEEE-488) reset before mount");
+        printf("    -u|--dummy-formats     don't actually format the disk if requested");
         printf("    -?|-h|--help           show help\n");
         printf("    --version              show version\n");
         fuse_lib_help(args);
@@ -1699,6 +1920,7 @@ int process_args(struct fuse_args *args, struct cbm_state *cbm)
         goto EXIT;
     }
     cbm->force_bus_reset = options.force_bus_reset;
+    cbm->dummy_formats = options.dummy_formats;
     if (options.device_num == NULL)
     {
         cbm->device_num = DEFAULT_DEVICE_NUM;
