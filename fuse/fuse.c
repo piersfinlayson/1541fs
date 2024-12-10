@@ -275,6 +275,15 @@ struct cbm_state
 // listing in hand by the time the user asks for one, to speed up performance
 static void *read_dir_from_disk_thread_func(void *vargp);
 
+static void cbm_create_read_dir_thread(struct cbm_state *cbm)
+{
+        pthread_t thread_id;
+        pthread_create(&thread_id,
+                        NULL,
+                        read_dir_from_disk_thread_func,
+                        (void *)cbm);
+}
+
 // Must be called within a mutex lock if called after our fuse _init() function
 // has been called, and before fuse_exit() has been called.
 // Extended version of check_drive_status which will call the specified
@@ -405,11 +414,7 @@ static void *cbm_init(struct fuse_conn_info *conn,
     // Spawn a thread to read the disk, so it's faster to access this mount
     // later
     DEBUG("Spawn thread to read dir");
-    pthread_t thread_id;
-    pthread_create(&thread_id,
-                   NULL,
-                   read_dir_from_disk_thread_func,
-                   (void *)cbm);
+    cbm_create_read_dir_thread(cbm);
 
 EXIT:
 
@@ -565,7 +570,6 @@ static int cbm_getattr(const char *path,
                 rc = 0;
                 break;
             }
-
         }
     }
     else
@@ -1190,7 +1194,7 @@ EXIT:
 }
 
 // Must not be called with dummy channel!
-void cbm_free_channel(struct cbm_state *cbm, int ch)
+void release_channel(struct cbm_state *cbm, int ch)
 {
     assert(cbm != NULL);
     assert((ch >= 0) && (ch < NUM_CHANNELS));
@@ -1200,6 +1204,9 @@ void cbm_free_channel(struct cbm_state *cbm, int ch)
 
     memset(cbm->channel+ch, 0, sizeof(struct cbm_channel));
     cbm->channel[ch].num = (unsigned char)ch;
+
+    assert(cbm->channel[ch].num == ch);
+    assert(!cbm->channel[ch].open);
 }
 
 static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
@@ -1214,6 +1221,8 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
+
+    DEBUG("ENTRY: cbm_fuseopen() path: %s", path);
 
     if (strlen(path) > (MAX_FILENAME_LEN-1))
     {
@@ -1243,28 +1252,27 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         }
     }
 
+    // Copy path to actual_path (discardig leading /), so we can convert
+    // to petscii later
+    strcpy(actual_path, path+1);
+
     // Lookup the file in dir_entries
     struct cbm_dir_entry *entry = NULL;
     for (int ii = 0; ii < cbm->num_dir_entries; ii++)
     {
-        if (!strcmp(path+1, cbm->dir_entries[ii].filename))
+        if (!strcmp(actual_path, cbm->dir_entries[ii].filename))
         {
             DEBUG("Found file");
             entry = cbm->dir_entries + ii;
-            strcpy(actual_path, path+1);
             break;
         }
     }
-    if (entry == NULL)
-    {
-        WARN("Request to open non-existant file: %s", path);
-        rc = -ENOENT;
-        goto EXIT;
-    }
 
-    // Header is a special case - there's no file to open
-    if (entry->is_header)
+    // Note it's OK if we didn't find a file - we will create it
+
+    if ((entry != NULL) && entry->is_header)
     {
+        // Header is a special case - there's no file to open
         DEBUG("Request to open header");
         fi->fh = DUMMY_CHANNEL;
         rc = 0;
@@ -1305,6 +1313,8 @@ EXIT:
     {
         pthread_mutex_unlock(&(cbm->mutex));
     }
+
+    DEBUG("EXIT: cbm_fuseopen()");
 
     return rc;
 }
@@ -1354,7 +1364,7 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
         goto EXIT;
     }
 
-    cbm_free_channel(cbm, ch);
+    release_channel(cbm, ch);
     rc = 0;
     DEBUG("Release for file: %s channel: %d", actual_path, ch);
 
@@ -1456,6 +1466,8 @@ static int cbm_read(const char *path,
     entry = cbm_get_dir_entry(cbm, actual_path);
     if (entry == NULL)
     {
+        // This is a problem - as cbm_create re-reads dir when file is opened
+        // so it should exist by now
         WARN("Couldn't find file which is apparently open: %s channel %d", actual_path, ch);
         rc = -EBADF;
         goto EXIT;
@@ -1671,11 +1683,7 @@ static int cbm_write(const char *path,
 
             // Force directory reread
             cbm->dir_is_clean = 0;
-            pthread_t thread_id;
-            pthread_create(&thread_id,
-                           NULL,
-                           read_dir_from_disk_thread_func,
-                           (void *)cbm);
+            cbm_create_read_dir_thread(cbm);
 
             DEBUG("Format successful");
             rc = (int)size;
@@ -1684,11 +1692,7 @@ static int cbm_write(const char *path,
         {
             // Does't matter what gets written - we'll kick off reread anyway
             DEBUG("Request to force disk reread");
-            pthread_t thread_id;
-            pthread_create(&thread_id,
-                           NULL,
-                           read_dir_from_disk_thread_func,
-                           (void *)cbm);
+            cbm_create_read_dir_thread(cbm);
             rc = (int)size;
         }
         else 
@@ -1774,6 +1778,44 @@ EXIT:
     return rc;
 }
 
+static int cbm_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+    int rc = -1;
+    (void)fi;
+    (void)mode;  // We can avoid mode, because we don't bother with file permissions
+
+    DEBUG("ENTRY: cbm_create path: %s", path);
+
+    struct cbm_state *cbm = fuse_get_context()->private_data;
+    assert(cbm != NULL);
+    assert(fi != NULL);
+
+    // DO NOT LOCK - cbm_fuseopen will
+
+    rc = cbm_fuseopen(path, fi);
+    if (rc)
+    {
+        WARN("Failed to open channel to write: %s", path);
+        goto EXIT;
+    }
+
+    rc = cbm_write(path, "", 0, 0, fi);
+    if (rc)
+    {
+        WARN("Failed to write 0 bytes to new file");
+    }
+
+    // Now re-read directory so file exists! 
+    cbm_create_read_dir_thread(cbm);
+
+EXIT:
+
+    DEBUG("EXIT: cbm_create");
+
+    return rc;
+}
+
+
 static const struct fuse_operations cbm_oper =
 {
     .init     = cbm_init,
@@ -1784,6 +1826,7 @@ static const struct fuse_operations cbm_oper =
     .release  = cbm_release,
     .read     = cbm_read,
     .write    = cbm_write,
+    .create   = cbm_create,
 };
 
 static struct options
@@ -2041,7 +2084,6 @@ struct cbm_state *allocate_private_data(void)
     for (int ch = 0; ch < NUM_CHANNELS; ch++)
     {
         cbm->channel[ch].num = ch;
-        DEBUG("Allocated channel: %d", cbm->channel[ch].num);
     }
 
 EXIT:
@@ -2142,7 +2184,7 @@ EXIT:
             fuse_destroy(cbm->fuse);
             cbm->fuse = NULL;
         }
-        DEBUG("Dealloc memory\n");
+        DEBUG("Free private memory\n");
         free(cbm);
         shd.cbm = NULL;
     }

@@ -1,6 +1,9 @@
 # 1541fs executables
 1541fs-*
 
+# Pther 1541fs files
+mnt/*
+
 # Prerequisites
 *.d
 
