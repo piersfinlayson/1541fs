@@ -1396,6 +1396,7 @@ static int cbm_read(const char *path,
 {
     int locked = 0;
     int rc = -1;
+    int rc2;
     int ch;
     struct cbm_channel *channel;
     unsigned int len;
@@ -1492,10 +1493,10 @@ static int cbm_read(const char *path,
     rc = cbm_raw_read(cbm->fd, buf, len);
     if (rc < 0)
     {
-        rc = check_drive_status(cbm);
-        (void)rc;
+        rc2 = check_drive_status(cbm);
+        (void)rc2;
         WARN("Hit error reading file %s channel %d", actual_path, ch);
-        WARN("Drive status: %s", cbm->error_buffer);
+        WARN("Drive status: %d %s", rc, cbm->error_buffer);
         cbm_untalk(cbm->fd);
     }
     else if ((unsigned int)rc < len)
@@ -1516,7 +1517,6 @@ static int cbm_read(const char *path,
         size = 0;
     }
     rc = (int)size;
-    goto EXIT;
 
 EXIT:
 
@@ -1547,6 +1547,7 @@ static int cbm_write(const char *path,
     unsigned int len;
     struct cbm_dir_entry *entry;
     char *temp_buf = NULL;
+    const char *actual_path;
 
     struct cbm_state *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
@@ -1555,10 +1556,12 @@ static int cbm_write(const char *path,
 
     ch = (int)(fi->fh);
 
+    actual_path = path+1;
+
     if (ch == DUMMY_CHANNEL)
     {
         DEBUG("Request to write special file");
-        if (!strcmp(path+1, PATH_FORMAT_DISK))
+        if (!strcmp(path, PATH_FORMAT_DISK))
         {
             DEBUG("Request to write " PATH_FORMAT_DISK " size: %lu offset %ld",
                   size,
@@ -1677,7 +1680,7 @@ static int cbm_write(const char *path,
             DEBUG("Format successful");
             rc = (int)size;
         }
-        else if (!strcmp(path+1, PATH_FORCE_DISK_REREAD))
+        else if (!strcmp(actual_path, PATH_FORCE_DISK_REREAD))
         {
             // Does't matter what gets written - we'll kick off reread anyway
             DEBUG("Request to force disk reread");
@@ -1701,7 +1704,12 @@ static int cbm_write(const char *path,
 
     assert((ch >= 0) && (ch < NUM_CHANNELS));
     channel = cbm->channel+ch;
-    assert(!strcmp(path, channel->filename));
+    if (strcmp(channel->filename, actual_path))
+    {
+        WARN("Filename doesn't match channel provided %d", ch);
+        rc = -EBADF;
+        goto EXIT;
+    }
 
     entry = cbm_get_dir_entry(cbm, path);
     if (entry == NULL)
@@ -1717,8 +1725,39 @@ static int cbm_write(const char *path,
         goto EXIT;
     }
 
-    // TO DO - actually write the file 
-    rc = -ENOTSUP;
+    if (offset != 0)
+    {
+        DEBUG("Asked to write at offset - not yet supported");
+        rc = -ENOTSUP;
+        goto EXIT;
+    }
+
+    rc = cbm_listen(cbm->fd, cbm->device_num, (unsigned char)ch);
+    if (rc < 0)
+    {
+        rc2 = check_drive_status(cbm);
+        (void)rc2;
+        WARN("Hit error instructing drive to listen, to write file %s channel %d", actual_path, ch);
+        WARN("Drive status: %s", cbm->error_buffer);
+        goto EXIT;
+    }
+
+    rc = cbm_raw_write(cbm->fd, buf, size);
+    cbm_unlisten(cbm->fd);
+    if (rc < 0)
+    {
+        rc = check_drive_status(cbm);
+        (void)rc;
+        WARN("Hit error writing file %s channel %d", actual_path, ch);
+        WARN("Drive status: %s", cbm->error_buffer);
+    }
+    else if ((unsigned long)rc < size)
+    {
+        WARN("Couldn't write the whole of file %s channel %d", actual_path, ch);
+        goto EXIT;
+    }
+
+    DEBUG("Successfully wrote file: %s bytes: %d", actual_path, rc);
 
 EXIT:
 
