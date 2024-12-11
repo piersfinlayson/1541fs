@@ -387,10 +387,12 @@ typedef struct cbm_state
     size_t max_num_files;
 } CBM;
 
+// Used to store information about dummy files - their names and the (read)
+// contents
 struct dummy_files
 {
     const char *filename;
-    const char *contents;
+    const char *read_contents;
 };
 
 // cbmargs.c
