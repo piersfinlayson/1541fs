@@ -1059,7 +1059,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
     else
     {
         entry->filesize = size;
-        entry->contents = contents;
+        entry->read_contents = contents;
     }
 
     // Set stat, ready to be provided to FUSE when requested

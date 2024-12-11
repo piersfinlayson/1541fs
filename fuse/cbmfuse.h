@@ -223,10 +223,10 @@ struct cbm_file
     // decide to expose a different value)
     off_t filesize;
 
-    // Pointer to the contents of this file.  Only suitable for statically
-    // allocated strings - as the pointer will never (and should never) be
-    // freed up for these
-    const char *contents;
+    // Pointer to the contents of this file (to read).  Only suitable for
+    // statically allocated strings - as the pointer will never (and should
+    // never) be freed up for these
+    const char *read_contents;
 };
 
 // Information about an entry from the disk directory.  May be either a header
