@@ -1,5 +1,6 @@
 #include "cbmfuse.h"
 
+// KEEP - rename?
 // Special paths
 // Must not begin or terminate the / or FUSE will barf
 const char *special_dirs[] =
@@ -9,12 +10,14 @@ const char *special_dirs[] =
     NULL
 };
 
+// KEEP - rename?
 const char *special_files[] = {
     PATH_FORCE_DISK_REREAD,
     PATH_FORMAT_DISK,
     NULL,
 };
 
+// KEEP
 // Removes any trailing spaces from the end of a string
 // Returns the new string length
 static int remove_trailing_spaces(char *str) {
@@ -36,6 +39,7 @@ static int remove_trailing_spaces(char *str) {
     return (ii + 1);
 }
 
+// DELETE
 // Reallocates a line_count number of directory entries, retaining the
 // existing entries
 static void realloc_dir_entries(CBM *cbm, int line_count)
@@ -66,6 +70,7 @@ EXIT:
     return;
 }
 
+// KEEP
 // Reallocates a buffer if we've run out of space
 static void check_realloc_buffer(char **buffer,
                           unsigned int *buf_len,
@@ -90,6 +95,7 @@ static void check_realloc_buffer(char **buffer,
     }
 }
 
+// REWORK (what a nightmare!)
 // Reads in the directory from a CBM disk
 int read_dir_from_disk(CBM *cbm)
 {
@@ -413,6 +419,7 @@ EXIT:
 
 }
 
+// DELETE
 // Generic function which decides in this is a special file or special
 // directory
 static int is_special(const char *path, const char **strings)
@@ -441,16 +448,19 @@ EXIT:
     return rc;
 }
 
+// DELETE
 int is_special_dir(const char *path)
 {
     return is_special(path, special_dirs);
 }
 
+// DELETE
 int is_special_file(const char *path)
 {
     return is_special(path, special_files);
 }
 
+// DELETE
 // Sets up stat information about the file in order to provide it to FUSE
 void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
 {
@@ -479,8 +489,7 @@ void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
     }
 }
 
-// Above here likely to be significantly reworked
-// * keep remove_trailing_spaces
+// Above here needs to be significantly reworked
 
 // Frees up any memory associated with file entrys in cbm_state.
 void destroy_files(CBM *cbm)
