@@ -145,6 +145,18 @@ static int cbm_getattr(const char *path,
         strncpy(entry.filename, path, MAX_FILENAME_LEN-1);
         entry.is_dir = sdir ? 1 : 0;
         entry.is_special = 1;
+        if (!strcmp(path+1, PATH_FORMAT_DISK))
+        {
+            entry.filesize = strlen(FORMAT_CONTENTS);
+        }
+        else if (!strcmp(path+1, PATH_FORCE_DISK_REREAD))
+        {
+            entry.filesize = strlen(FORCE_DISK_REREAD_CONTENTS);
+        }
+        else
+        {
+            // Ignore - must be one of the dirs
+        }
         set_stat(&entry, stbuf);
         rc = 0;
     }
@@ -274,6 +286,18 @@ static int cbm_readdir(const char *path,
     {
         memset(&entry, 0, sizeof(entry));
         entry.is_special = 1;
+        if (!strcmp(sf, PATH_FORMAT_DISK))
+        {
+            entry.filesize = strlen(FORMAT_CONTENTS);
+        }
+        else if (!strcmp(sf, PATH_FORCE_DISK_REREAD))
+        {
+            entry.filesize = strlen(FORCE_DISK_REREAD_CONTENTS);
+        }
+        else
+        {
+            assert(0);
+        }
         strncpy(entry.filename, sf, MAX_FILENAME_LEN-1);
         set_stat(&entry, &stbuf);
         DEBUG("Special file: %s", sf);
@@ -517,13 +541,14 @@ static int cbm_read(const char *path,
     struct cbm_dir_entry *entry;
     char *temp_buf = NULL;
     const char *actual_path;
+    char *dummy_contents;
 
     CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
     assert(offset >= 0);
 
-    DEBUG("ENTRY: cbm_read() path %s size: %lu size:%ld", path, size, offset);
+    DEBUG("ENTRY: cbm_read() path %s size: %lu offset:%ld", path, size, offset);
 
     ch = (int)(fi->fh);
 
@@ -534,24 +559,33 @@ static int cbm_read(const char *path,
         DEBUG("Request to read special file");
         if (!strcmp(actual_path, PATH_FORMAT_DISK))
         {
-            DEBUG("Request to read " PATH_FORMAT_DISK);
-            len = strlen(FORMAT_CONTENTS);
-            if (offset < len)
-            {
-                if ((long unsigned int)offset + size > len)
-                {
-                    size = len - (long unsigned int)offset;
-                }
-                memcpy(buf, FORMAT_CONTENTS, size);
-            }
-            else
-            {
-                rc = 0;
-            }
-            rc = (int)size;
-            goto EXIT;
-
+            dummy_contents = FORMAT_CONTENTS;
         }
+        else if (!strcmp(actual_path, PATH_FORCE_DISK_REREAD))
+        {
+            dummy_contents = FORCE_DISK_REREAD_CONTENTS;
+        }
+        else
+        {
+            assert(0);
+        }
+        DEBUG("Request to read %s", actual_path);
+        len = (unsigned int)strlen(dummy_contents);
+        if (offset < len)
+        {
+            if ((long unsigned int)offset + size > len)
+            {
+                size = len - (long unsigned int)offset;
+            }
+            memcpy(buf, dummy_contents, size);
+        }
+        else
+        {
+            rc = 0;
+        }
+        rc = (int)size;
+        goto EXIT;
+
     }
 
     pthread_mutex_lock(&(cbm->mutex));
@@ -677,8 +711,8 @@ static int cbm_write(const char *path,
 
     if (ch == DUMMY_CHANNEL)
     {
-        DEBUG("Request to write special file");
-        if (!strcmp(path, PATH_FORMAT_DISK))
+        DEBUG("Request to write special file: %s", path);
+        if (!strcmp(actual_path, PATH_FORMAT_DISK))
         {
             DEBUG("Request to write " PATH_FORMAT_DISK " size: %lu offset %ld",
                   size,
@@ -803,7 +837,7 @@ static int cbm_write(const char *path,
         else 
         {
             DEBUG("Unsupported special file");
-            rc = -ENOENT;
+            rc = -EACCES;
         }
         goto EXIT;
     }

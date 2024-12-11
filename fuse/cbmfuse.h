@@ -39,13 +39,17 @@ extern int current_log_level;
 #define DEBUG(format, ...)
 #endif
 
-// What will be read out of format-disk
+// What will be read out of format_disk
 #define FORMAT_CONTENTS \
     "To format a disk write the new disk name followed by the ID to this file.\n" \
     "The disk name can be a maximum of 16 characters and the ID two digits.\n" \
     "Separate the two with a comma.  For example:\n" \
-    "my new disk,01"
+    "  echo \"my new disk,01\" > ./" PATH_FORMAT_DISK "\n"
 
+// What will be read out of disk_reread
+#define FORCE_DISK_REREAD_CONTENTS \
+    "To force a disk re-read, write anything to this file.  For example:\n" \
+    "  echo \"1\" > ./" PATH_FORCE_DISK_REREAD "\n"
 
 // Various return string prefixes from Commdore DOS
 #define DOS_OK_PREFIX "00"        // OK
