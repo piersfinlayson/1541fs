@@ -405,6 +405,7 @@ extern void release_channel(CBM *cbm, int ch);
 
 // cbmdummy.c
 extern const struct dummy_files dummy_files[];
+extern const char *dummy_dirs[];
 
 // cbmfile.c
 extern int read_dir_from_disk(CBM *cbm);

@@ -23,3 +23,10 @@ const struct dummy_files dummy_files[] =
         .contents = NULL,
     },
 };
+
+const char *dummy_dirs[] =
+{
+    ".",
+    "..",
+    NULL,
+};
