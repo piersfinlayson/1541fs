@@ -80,7 +80,11 @@ static void check_realloc_buffer(char **buffer,
 
         // The following handles the case if the remalloc failed -
         // the original buffer will still be freed, and buffer set to NULL
-        free(*buffer);
+        if (new_buffer == NULL)
+        {
+            // Realloc frees buffer if it moves it
+            free(*buffer);
+        }
         *buffer = new_buffer;
     }
 }
@@ -486,4 +490,192 @@ void destroy_files(CBM *cbm)
         free(cbm->files);
         cbm->files = NULL;
     }
+}
+
+// Returns the next free file entry, and if necessary will reallocate the
+// files array.
+//
+// Note that as this function may reallocate files, and file array entry
+// pointers already held will be invalidated.
+//
+// Returns NULL if there are no more free file entries, and it was unable to
+// reallocate memory for files.
+struct cbm_file *get_next_free_file_entry(CBM *cbm)
+{
+    struct cbm_file *new_files;
+    struct cbm_file *next_file;
+
+    DEBUG("ENTRY: get_next_free_file_entry()");
+
+    assert(cbm != NULL);
+    assert(cbm->max_num_files >= cbm->num_files);
+    
+    if (cbm->max_num_files == cbm->num_files)
+    {
+        DEBUG("Will allocate %d more file entries",
+              CBM_FILE_REALLOCATE_QUANTITY);
+        new_files = realloc(cbm->files,
+                            (cbm->max_num_files + CBM_FILE_REALLOCATE_QUANTITY) * sizeof(struct cbm_file));
+        if (new_files != NULL)
+        {
+            cbm->files = new_files;
+            memset(&cbm->files[cbm->max_num_files], 0,
+                   CBM_FILE_REALLOCATE_QUANTITY * sizeof(struct cbm_file));
+            cbm->max_num_files += CBM_FILE_REALLOCATE_QUANTITY;
+        }
+    }
+    else
+    {
+        new_files = cbm->files;
+    }
+
+    if (new_files != NULL)
+    {
+        next_file = cbm->files + cbm->num_files;
+    }
+    else
+    {
+        next_file = NULL;
+    }
+
+    DEBUG("EXIT: get_next_free_file_entry()");
+
+    return next_file;
+}
+
+// Frees up the provided file entry, and will rejig remaining file entries to ensure
+// they are contiguous.
+//
+// Also frees up some memory (reallocating the entire array if there are more
+// than CBM_FILE_REALLOCATE_QUANTITY * 2entries free in order to provide
+// hysteresis
+void free_file_entry(CBM *cbm, struct cbm_file *file)
+{
+    DEBUG("ENTRY: free_file_entry()");
+    
+    // Validate inputs
+    assert(cbm != NULL);
+    assert(file != NULL);
+    assert(cbm->files != NULL);
+    assert(cbm->num_files > 0);  // Must have at least one file to free
+    assert(cbm->max_num_files >= cbm->num_files);
+    
+    // Check file pointer is within our array bounds AND properly aligned
+    assert((file >= cbm->files) && 
+           (file < (cbm->files + cbm->max_num_files)));
+    // Check pointer arithmetic would give us a whole number
+    assert(((long unsigned int)(file - cbm->files) * sizeof(struct cbm_file)) % 
+           sizeof(struct cbm_file) == 0);
+
+    // Calculate the index of the file to be removed
+    size_t index = (long unsigned int)(file - cbm->files);
+    assert(index < cbm->num_files);  // Must be within used portion
+    
+    // If this isn't the last entry, move all subsequent entries down
+    // to maintain contiguous storage
+    if (index < cbm->num_files - 1)
+    {
+        size_t entries_to_move = cbm->num_files - index - 1;
+        memmove(&cbm->files[index], 
+                &cbm->files[index + 1],
+                entries_to_move * sizeof(struct cbm_file));
+    }
+    
+    // Clear the now-unused last entry
+    memset(&cbm->files[cbm->num_files - 1], 0, sizeof(struct cbm_file));
+    cbm->num_files--;
+    
+    // Check if we should shrink the array
+    // Only shrink if we have more than CBM_FILE_REALLOCATE_QUANTITY * 2
+    // free entries to provide hysteresis
+    // Also maintain minimum number
+    if (((cbm->max_num_files - cbm->num_files) > 
+         (CBM_FILE_REALLOCATE_QUANTITY * 2)) &&
+            cbm->max_num_files > CBM_FILE_REALLOCATE_QUANTITY)
+    {
+        // Calculate the new maximum size by rounding up num_files to the next
+        // multiple of CBM_FILE_REALLOCATE_QUANTITY.
+        //
+        // Example: if CBM_FILE_REALLOCATE_QUANTITY = 10:
+        //   8 files -> new_max = 10
+        //   11 files -> new_max = 20
+        //   25 files -> new_max = 30
+        // The adding of (CBM_FILE_REALLOCATE_QUANTITY-1) before division
+        // achieves the round-up behavior using integer arithmetic which is
+        // more efficient that fp math
+        size_t new_max = ((cbm->num_files + CBM_FILE_REALLOCATE_QUANTITY - 1) 
+                         / CBM_FILE_REALLOCATE_QUANTITY) 
+                        * CBM_FILE_REALLOCATE_QUANTITY;
+        
+        // Ensure we don't go below minimum
+        if (new_max < CBM_FILE_REALLOCATE_QUANTITY)
+        {
+            new_max = CBM_FILE_REALLOCATE_QUANTITY;
+        }
+            
+        struct cbm_file *new_files = realloc(cbm->files, 
+                                            new_max * sizeof(struct cbm_file));
+        if (new_files != NULL)  // Only update if realloc succeeded
+        {
+            cbm->files = new_files;
+            cbm->max_num_files = new_max;
+        }
+        // If realloc fails, we just keep the existing larger buffer
+    }
+    
+    DEBUG("EXIT: free_file_entry()");
+
+    return;
+}
+
+// Find a file entry based on its CBM filename, or its FUSE filename - but not
+// both at the same time.
+// Returns a pointer to the entry, or NULL if not found.
+struct cbm_file *find_file_entry(CBM *cbm,
+                                 char *cbm_filename,
+                                 char *fuse_filename)
+{
+    char *filename;
+    size_t max_filename_len;
+    off_t offset;
+    struct cbm_file *entry = NULL;
+
+    DEBUG("ENTRY: find_file_entry()");
+
+    assert(cbm != NULL);
+    assert(cbm->max_num_files >= cbm->num_files);
+
+    assert(!((cbm_filename != NULL) && (fuse_filename != NULL)));
+
+    if (cbm_filename != NULL)
+    {
+        DEBUG("Find file based on CBM filename: %s", cbm_filename);
+        filename = cbm_filename;
+        max_filename_len = MAX_CBM_FILENAME_STR_LEN;
+        offset = offsetof(struct cbm_file, cbm_filename);
+    }
+    else
+    {
+        assert(fuse_filename != NULL);
+        DEBUG("Find file based on FUSE filename: %s", fuse_filename);
+        filename = fuse_filename;
+        max_filename_len = MAX_FUSE_FILENAME_STR_LEN;
+        offset = offsetof(struct cbm_file, fuse_filename);
+    }
+
+    for (size_t ii = 0; ii < cbm->num_files; ii++)
+    {
+        if (!strncmp((char *)(&(cbm->files[ii]) + offset),
+                     filename,
+                     max_filename_len))
+        {
+            DEBUG("Found match at entry #%lu", ii);
+            entry = &(cbm->files[ii]);
+            break;
+        }
+    }
+
+    DEBUG("EXIT: find_file_entry()");
+
+    return entry;
 }

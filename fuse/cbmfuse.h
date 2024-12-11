@@ -190,8 +190,8 @@ struct cbm_file
     // Zero for CBM_DUMMY_DIR and CBM_DUMMY_FILE types
     short cbm_blocks;
 
-    // Size in bytes of the file.  -1 until the file has been completely read
-    // as we only know blocks until then.  Remains -1 for CBM_DUMMY_DIR and
+    // Size in bytes of the file.  0 until the file has been completely read
+    // as we only know blocks until then.  Remains 0 for CBM_DUMMY_DIR and
     // CBM_DUMMY_FILE types
     short cbm_filesize;
 };
@@ -345,13 +345,13 @@ typedef struct cbm_state
 
     // Number of files that are present in the files field (i.e. number of
     // elements in the files array which are used).
-    unsigned short num_files;
+    size_t num_files;
 
     // The size of the files array - i.e. the number of elements which the
     // array will currently hold.  If more are required then files will need
     // to be reallocated.  (We will also reallocate if substantially fewer
     // are required.)
-    unsigned short max_num_files;
+    size_t max_num_files;
 } CBM;
 
 // cbmargs.c
@@ -370,6 +370,11 @@ extern int is_special_dir(const char *path);
 extern int is_special_file(const char *path);
 extern void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf);
 extern void destroy_files(CBM *cbm);
+extern struct cbm_file *return_next_free_file_entry(CBM *cbm);
+extern void free_file_entry(CBM *cbm, struct cbm_file *file);
+extern struct cbm_file *find_file_entry(CBM *cbm,
+                                        char *cbm_filename,
+                                        char *fuse_filename);
 
 // cbmfuse.c
 extern void cbm_destroy(void *private_data);
