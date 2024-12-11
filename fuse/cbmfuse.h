@@ -239,7 +239,7 @@ struct cbm_dir_entry
 
 // Our FUSE private data.  When called by FUSE, this can be retrieved via
 // fuse_get_context()->private_data. 
-struct cbm_state
+typedef struct cbm_state
 {
     // FUSE's private data, which we have to provide on every call to FUSE.
     // However, we only access this from with the signal handler - within 
@@ -352,24 +352,24 @@ struct cbm_state
     // to be reallocated.  (We will also reallocate if substantially fewer
     // are required.)
     unsigned short max_num_files;
-};
+} CBM;
 
 // cbmargs.c
-extern int process_args(struct fuse_args *args, struct cbm_state *cbm);
-extern void destroy_args(struct cbm_state *cbm);
+extern int process_args(struct fuse_args *args, CBM *cbm);
+extern void destroy_args(CBM *cbm);
 
 // cbmchannel.c
-extern int allocate_free_channel(struct cbm_state *cbm,
+extern int allocate_free_channel(CBM *cbm,
                                  enum cbm_channel_usage usage,
                                  const char *filename);
-extern void release_channel(struct cbm_state *cbm, int ch);
+extern void release_channel(CBM *cbm, int ch);
 
 // cbmfile.c
-extern int read_dir_from_disk(struct cbm_state *cbm);
+extern int read_dir_from_disk(CBM *cbm);
 extern int is_special_dir(const char *path);
 extern int is_special_file(const char *path);
 extern void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf);
-extern void destroy_files(struct cbm_state *cbm);
+extern void destroy_files(CBM *cbm);
 
 // cbmfuse.c
 extern void cbm_destroy(void *private_data);
@@ -379,15 +379,15 @@ extern const struct fuse_operations cbm_operations;
 extern void init_logging();
 
 // cbmmain.c
-extern void destroy_private_data(struct cbm_state *cbm, int clean);
+extern void destroy_private_data(CBM *cbm, int clean);
 
 // cbmsignal.c
-extern void setup_signal_handler(struct cbm_state *cbm);
+extern void setup_signal_handler(CBM *cbm);
 extern void cleanup_signal_handler();
 
 // cbmstatus.c
-extern int check_drive_status_cmd(struct cbm_state *cbm, char *cmd);
-extern int check_drive_status(struct cbm_state *cbm);
+extern int check_drive_status_cmd(CBM *cbm, char *cmd);
+extern int check_drive_status(CBM *cbm);
 
 // cbmthread.c
-extern void cbm_create_read_dir_thread(struct cbm_state *cbm);
+extern void cbm_create_read_dir_thread(CBM *cbm);

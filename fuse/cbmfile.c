@@ -37,7 +37,7 @@ static int remove_trailing_spaces(char *str) {
 
 // Reallocates a line_count number of directory entries, retaining the
 // existing entries
-static void realloc_dir_entries(struct cbm_state *cbm, int line_count)
+static void realloc_dir_entries(CBM *cbm, int line_count)
 {
     if (line_count > cbm->num_dir_entries)
     {
@@ -86,7 +86,7 @@ static void check_realloc_buffer(char **buffer,
 }
 
 // Reads in the directory from a CBM disk
-int read_dir_from_disk(struct cbm_state *cbm)
+int read_dir_from_disk(CBM *cbm)
 {
     unsigned int buf_len;
     unsigned int data_len;
@@ -474,7 +474,7 @@ void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
     }
 }
 
-void destroy_files(struct cbm_state *cbm)
+void destroy_files(CBM *cbm)
 {
     if (cbm->dir_entries != NULL)
     {

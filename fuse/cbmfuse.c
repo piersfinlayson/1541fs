@@ -7,7 +7,7 @@ static void *cbm_init(struct fuse_conn_info *conn,
     (void)conn;
     (void)cfg;
     int failed = 0;
-    struct cbm_state *cbm = fuse_get_context()->private_data;
+    CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     int rc;
 
@@ -88,7 +88,7 @@ EXIT:
 // Not a static, as also called directly by main
 void cbm_destroy(void *private_data)
 {
-    struct cbm_state *cbm = private_data;
+    CBM *cbm = private_data;
     assert(cbm != NULL);
 
     if (cbm->is_initialized)
@@ -119,7 +119,7 @@ static int cbm_getattr(const char *path,
     const char *actual_path;
     int sdir, sfile;
 
-    struct cbm_state *cbm = fuse_get_context()->private_data;
+    CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(path != NULL);
     assert(stbuf != NULL);
@@ -187,7 +187,7 @@ static int cbm_readdir(const char *path,
     struct cbm_dir_entry entry;
     struct stat stbuf;
 
-    struct cbm_state *cbm = fuse_get_context()->private_data;
+    CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
 
     pthread_mutex_lock(&(cbm->mutex));
@@ -316,7 +316,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     char actual_path[MAX_FILENAME_LEN];
     char *petscii_path;
 
-    struct cbm_state *cbm = fuse_get_context()->private_data;
+    CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
 
@@ -425,7 +425,7 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
     struct cbm_channel *channel;
     const char *actual_path;
 
-    struct cbm_state *cbm = fuse_get_context()->private_data;
+    CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
 
@@ -476,7 +476,7 @@ EXIT:
     return rc;
 }
 
-static struct cbm_dir_entry *cbm_get_dir_entry(struct cbm_state *cbm,
+static struct cbm_dir_entry *cbm_get_dir_entry(CBM *cbm,
                                                const char *filename)
 {
     struct cbm_dir_entry *entry = NULL;
@@ -512,7 +512,7 @@ static int cbm_read(const char *path,
     char *temp_buf = NULL;
     const char *actual_path;
 
-    struct cbm_state *cbm = fuse_get_context()->private_data;
+    CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
     assert(offset >= 0);
@@ -659,7 +659,7 @@ static int cbm_write(const char *path,
     char *temp_buf = NULL;
     const char *actual_path;
 
-    struct cbm_state *cbm = fuse_get_context()->private_data;
+    CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
     assert(offset >= 0);
@@ -884,7 +884,7 @@ static int cbm_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
     DEBUG("ENTRY: cbm_create path: %s", path);
 
-    struct cbm_state *cbm = fuse_get_context()->private_data;
+    CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
 

@@ -1,11 +1,11 @@
 #include "cbmfuse.h"
 
-static struct cbm_state *allocate_private_data(void)
+static CBM *allocate_private_data(void)
 {
     DEBUG("ENTRY: allocate_private_data()");
 
     // Allocate and zero memory
-    struct cbm_state *cbm = malloc(sizeof(struct cbm_state));
+    CBM *cbm = malloc(sizeof(struct cbm_state));
     if (cbm == NULL)
     {
         ERROR("Failed to allocate memory");
@@ -27,7 +27,7 @@ EXIT:
 } 
 
 // Not static, as called by handle_signal()
-void destroy_private_data(struct cbm_state *cbm, int clean)
+void destroy_private_data(CBM *cbm, int clean)
 {
     DEBUG("ENTRY: destroy_private_data()");
 
@@ -44,7 +44,7 @@ void destroy_private_data(struct cbm_state *cbm, int clean)
     DEBUG("EXIT: destroy_private_data()");
 }
 
-static void cleanup_fuse(struct cbm_state *cbm)
+static void cleanup_fuse(CBM *cbm)
 {
     DEBUG("ENTRY: cleanup_fuse()");
     
@@ -70,7 +70,7 @@ static void cleanup_fuse(struct cbm_state *cbm)
 
 int main(int argc, char *argv[])
 {
-    struct cbm_state *cbm;
+    CBM *cbm;
     int ret = 1;
 
     // Set up first, as the signal handler will need access

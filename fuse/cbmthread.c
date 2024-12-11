@@ -4,11 +4,11 @@
 // cbm_create_read_dir_thread()
 static void *read_dir_from_disk_thread_func(void *vargp)
 {
-    struct cbm_state *cbm;
+    CBM *cbm;
     int rc;
     
     assert(vargp != NULL);
-    cbm = (struct cbm_state *)vargp;
+    cbm = (CBM *)vargp;
     assert(cbm != NULL);
 
     pthread_mutex_lock(&(cbm->mutex));
@@ -29,7 +29,7 @@ static void *read_dir_from_disk_thread_func(void *vargp)
 // kernel or user.
 // Is also done at other times, as the code chooses, normally when the code
 // suspects the directory contents have changed.
-void cbm_create_read_dir_thread(struct cbm_state *cbm)
+void cbm_create_read_dir_thread(CBM *cbm)
 {
     pthread_t thread_id;
     pthread_create(&thread_id,

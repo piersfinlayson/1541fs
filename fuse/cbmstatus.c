@@ -8,7 +8,7 @@
 // Extended version of check_drive_status which will call the specified
 // command (like "UJ" or "I") before issuing the status query.
 // Can be called with cmd == NULL, in which case a command is not issued
-int check_drive_status_cmd(struct cbm_state *cbm, char *cmd)
+int check_drive_status_cmd(CBM *cbm, char *cmd)
 {
     int rc;
     int len;
@@ -68,7 +68,7 @@ int check_drive_status_cmd(struct cbm_state *cbm, char *cmd)
 //
 // Must be called within a mutex lock if called after our fuse _init() function
 // has been called, and before fuse_exit() has been called.
-int check_drive_status(struct cbm_state *cbm)
+int check_drive_status(CBM *cbm)
 {
     return check_drive_status_cmd(cbm, NULL);
 }

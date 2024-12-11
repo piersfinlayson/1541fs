@@ -1,7 +1,7 @@
 #include "cbmfuse.h"
 
 // Allocate a free CBM channel, based on the required usage and free channels
-int allocate_free_channel(struct cbm_state *cbm,
+int allocate_free_channel(CBM *cbm,
                           enum cbm_channel_usage usage,
                           const char *filename)
 {
@@ -73,7 +73,7 @@ EXIT:
 
 // To release an allocated channel.  Mustn't be used with a dummy channel
 // (these aren't "allocated" in the first place)
-void release_channel(struct cbm_state *cbm, int ch)
+void release_channel(CBM *cbm, int ch)
 {
     assert(cbm != NULL);
     assert((ch >= 0) && (ch < NUM_CHANNELS));

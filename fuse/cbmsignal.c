@@ -5,7 +5,7 @@
 // accessing cbm this way.  Other functions within the fuse context should
 // get using fuse_get_context()->private_data.
 struct signal_handler_data {
-    struct cbm_state *cbm;
+    CBM *cbm;
 };
 
 static struct signal_handler_data shd; 
@@ -17,7 +17,7 @@ static void handle_signal(int signal)
     // process of accessing this CBM, which is controlled via a contained
     // mutex.  But we can't help that, as a signal could be caught and handled
     // while the lock is held.
-    struct cbm_state *cbm = shd.cbm;
+    CBM *cbm = shd.cbm;
 
     // Try and unmount and destroy fuse
     // We won't bother to get the mutex, because it may well be locked already
@@ -61,7 +61,7 @@ static void handle_signal(int signal)
     }
 }
 
-void setup_signal_handler(struct cbm_state *cbm)
+void setup_signal_handler(CBM *cbm)
 {
     int termination_signals[] = {
         SIGHUP,   // Hangup detected on controlling terminal or death of controlling process

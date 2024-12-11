@@ -57,7 +57,7 @@ static int opt_proc(void *data,
 }
 
 // Main arg processing, called by main()
-int process_args(struct fuse_args *args, struct cbm_state *cbm)
+int process_args(struct fuse_args *args, CBM *cbm)
 {
     int ret = 1;
     struct fuse_cmdline_opts fuse_opts = { 0 };
@@ -147,7 +147,7 @@ EXIT:
     return ret;
 }
 
-void destroy_args(struct cbm_state *cbm)
+void destroy_args(CBM *cbm)
 {
     if (cbm->mountpoint != NULL)
     {
