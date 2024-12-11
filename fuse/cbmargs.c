@@ -146,3 +146,12 @@ EXIT:
 
     return ret;
 }
+
+void destroy_args(struct cbm_state *cbm)
+{
+    if (cbm->mountpoint != NULL)
+    {
+        free(cbm->mountpoint);
+        cbm->mountpoint = NULL;
+    }
+}

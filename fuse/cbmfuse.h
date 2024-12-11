@@ -274,6 +274,7 @@ struct cbm_state
     // have exited before the cleanup code is called.  In both cases we want to
     // avoid blocking due to the mutex lock being held elsewhere. 
     pthread_mutex_t mutex;
+    int mutex_initialized;
 
     // The file descriptor from opencbm, used for all XUM1541 access
     CBM_FILE fd;
@@ -355,6 +356,7 @@ struct cbm_state
 
 // cbmargs.c
 extern int process_args(struct fuse_args *args, struct cbm_state *cbm);
+extern void destroy_args(struct cbm_state *cbm);
 
 // cbmchannel.c
 extern int allocate_free_channel(struct cbm_state *cbm,
@@ -367,14 +369,17 @@ extern int read_dir_from_disk(struct cbm_state *cbm);
 extern int is_special_dir(const char *path);
 extern int is_special_file(const char *path);
 extern void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf);
+extern void destroy_files(struct cbm_state *cbm);
 
 // cbmfuse.c
+extern void cbm_destroy(void *private_data);
 extern const struct fuse_operations cbm_operations;
 
 // cbmlog.c
 extern void init_logging();
 
 // cbmmain.c
+extern void destroy_private_data(struct cbm_state *cbm, int clean);
 
 // cbmsignal.c
 extern void setup_signal_handler(struct cbm_state *cbm);

@@ -473,3 +473,17 @@ void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
         stbuf->st_atime = stbuf->st_ctime = stbuf->st_mtime = time(NULL);
     }
 }
+
+void destroy_files(struct cbm_state *cbm)
+{
+    if (cbm->dir_entries != NULL)
+    {
+        free(cbm->dir_entries);
+        cbm->dir_entries = NULL;
+    }
+    if (cbm->files != NULL)
+    {
+        free(cbm->files);
+        cbm->files = NULL;
+    }
+}

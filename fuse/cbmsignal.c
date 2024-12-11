@@ -52,7 +52,7 @@ static void handle_signal(int signal)
                     fuse_destroy(cbm->fuse);
                     cbm->fuse = NULL;
                 }
-                free(cbm);
+                destroy_private_data(cbm, 0);
                 cbm = NULL;
             }
             INFO("Exiting after handling signal");

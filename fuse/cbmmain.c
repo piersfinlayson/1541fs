@@ -26,30 +26,19 @@ EXIT:
     return cbm;
 } 
 
-static void destroy_private_data(struct cbm_state *cbm)
+// Not static, as called by handle_signal()
+void destroy_private_data(struct cbm_state *cbm, int clean)
 {
     DEBUG("ENTRY: destroy_private_data()");
 
-    if (cbm->fd != (CBM_FILE)0)
+    // handle_signal() doesn't want to attempt a clean shutdown as it may fail
+    // and hang
+    if (clean)
     {
-        cbm_driver_close(cbm->fd);
-        cbm->fd = (CBM_FILE)0;
+        cbm_destroy(cbm);
     }
-    if (cbm->mountpoint != NULL)
-    {
-        free(cbm->mountpoint);
-        cbm->mountpoint = NULL;
-    }
-    if (cbm->dir_entries != NULL)
-    {
-        free(cbm->dir_entries);
-        cbm->dir_entries = NULL;
-    }
-    if (cbm->files != NULL)
-    {
-        free(cbm->files);
-        cbm->files = NULL;
-    }
+    destroy_args(cbm);
+    destroy_files(cbm);
     free(cbm);
 
     DEBUG("EXIT: destroy_private_data()");
@@ -164,7 +153,7 @@ EXIT:
     // Cleanup signal handler before freeing cbm
     cleanup_signal_handler();
 
-    destroy_private_data(cbm);
+    destroy_private_data(cbm, 1);
     cbm = NULL;
 
     DEBUG("Exiting");

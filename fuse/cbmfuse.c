@@ -18,9 +18,11 @@ static void *cbm_init(struct fuse_conn_info *conn,
         ERROR("Failed to initialize mutex\n");
         return NULL;
     }
+    else
+    {
+        cbm->mutex_initialized = 1;
+    }
 
-    cbm->is_initialized = 0;
-    
     DEBUG("Open XUM1541 driver");
     if (cbm_driver_open(&cbm->fd, 0) != 0) {
         WARN("Failed to open OpenCBM driver\n");
@@ -66,7 +68,10 @@ EXIT:
 
     if (failed)
     {
-        pthread_mutex_destroy(&cbm->mutex);
+        if (cbm->mutex_initialized)
+        {
+            pthread_mutex_destroy(&cbm->mutex);
+        }
         ERROR("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?", cbm->device_num);
         printf("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?\n", cbm->device_num);
         struct fuse *fuse = fuse_get_context()->fuse;
@@ -80,7 +85,8 @@ EXIT:
 }
 
 // Clean up when unmounting
-static void cbm_destroy(void *private_data)
+// Not a static, as also called directly by main
+void cbm_destroy(void *private_data)
 {
     struct cbm_state *cbm = private_data;
     assert(cbm != NULL);
@@ -89,14 +95,18 @@ static void cbm_destroy(void *private_data)
     {
         // Clear pending errors
         check_drive_status(cbm);
+        cbm->is_initialized = 0;
     }
     if (cbm->fd != (CBM_FILE)0)
     {
         cbm_driver_close(cbm->fd);
         cbm->fd = (CBM_FILE)0;
     }
-
-    pthread_mutex_destroy(&(cbm->mutex));
+    if (cbm->mutex_initialized)
+    {
+        pthread_mutex_destroy(&(cbm->mutex));
+        cbm->mutex_initialized = 0;
+    }
 }
 
 // Updated getattr function signature for FUSE3
