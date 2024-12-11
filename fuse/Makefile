@@ -8,7 +8,15 @@ LDFLAGS = -Wl,-z,relro,-z,now
 LIBS = -lopencbm -lfuse3 -lpthread
 
 TARGET = 1541fs-fuse
-SRC = fuse.c
+SRC = cbmargs.c     \
+      cbmchannel.c  \
+      cbmfile.c     \
+      cbmfuse.c     \
+      cbmlog.c      \
+      cbmmain.c     \
+      cbmsignal.c   \
+      cbmstatus.c   \
+      cbmthread.c
 OBJ = $(SRC:.c=.o)
 
 # Version info from git
