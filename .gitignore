@@ -2,6 +2,7 @@
 1541fs-*
 
 # Other 1541fs files
+fuse/obj
 fuse/mnt/*
 
 # Prerequisites

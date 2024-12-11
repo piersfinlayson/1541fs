@@ -17,7 +17,7 @@ SRC = cbmargs.c     \
       cbmsignal.c   \
       cbmstatus.c   \
       cbmthread.c
-OBJ = $(SRC:.c=.o)
+OBJ = $(addprefix obj/,$(SRC:.c=.o))
 
 # Version info from git
 VERSION = $(shell git describe --always --dirty)
@@ -27,14 +27,18 @@ CPPFLAGS += -DVERSION=\"$(VERSION)\" -DDEBUG_BUILD
 DEPS = $(OBJ:.o=.d)
 CFLAGS += -MMD -MP
 
-$(TARGET): $(OBJ)
+$(TARGET): $(OBJ) | obj
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 
-%.o: %.c
+obj/%.o: %.c | obj
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+obj:
+	mkdir -p obj
 
 clean:
 	rm -f $(TARGET) $(OBJ) $(DEPS)
+	rmdir obj 2>/dev/null || true
 
 -include $(DEPS)
 
