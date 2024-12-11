@@ -180,7 +180,7 @@ enum cbm_file_type
 enum file_source
 {
     SOURCE_CBM,
-    SOURCE_LINUX,
+    SOURCE_DUMMY,
 };
 
 // Information about a file.  This might be a file which actually exists on
@@ -398,29 +398,27 @@ extern void free_file_entry(CBM *cbm, struct cbm_file *file);
 extern struct cbm_file *find_file_entry(CBM *cbm,
                                         char *cbm_filename,
                                         char *fuse_filename);
+extern struct cbm_file *find_cbm_file_entry(CBM *cbm,
+                                            char *filename);
+extern struct cbm_file *find_dummy_file_entry(CBM *cbm,
+                                            char *filename);
 extern struct cbm_file *create_file_entry(CBM *cbm,
                                           const enum file_source source,
                                           const char *filename,
                                           const char *suffix,
                                           const int directory,
                                           const off_t size,
-                                          int *errno);
-#define create_file_entry_cbm(CBM, FILENAME, SUFFIX, CBM_BLKS, ERRNO) \
-        create_file_entry(CBM,        \
-                          FILENAME,   \
-                          SUFFIX,     \
-                          SOURCE_CBM, \
-                          0,          \
-                          CBM_BLKS,   \
-                          ERRNO)
-#define create_file_entry_dummy(CBM, FILENAME, SUFFIX, ISDIR, FILESIZE, ERRNO) \
-        create_file_entry(CBM,        \
-                          FILENAME,   \
-                          SUFFIX,     \
-                          SOURCE_CBM, \
-                          ISDIR,      \
-                          FILESIZE,   \
-                          ERRNO)
+                                          int *error);
+extern struct cbm_file *create_cbm_file_entry(CBM *cbm,
+                                              const char *filename,
+                                              const char *suffix,
+                                              const off_t cbm_blocks,
+                                              int *error);
+extern struct cbm_file *create_dummy_file_entry(CBM *cbm,
+                                                const char *filename,
+                                                const int directory,
+                                                const off_t filesize,
+                                                int *error);
 
 // cbmfuse.c
 extern void cbm_destroy(void *private_data);

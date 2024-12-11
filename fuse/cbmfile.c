@@ -858,6 +858,17 @@ struct cbm_file *find_file_entry(CBM *cbm,
     return entry;
 }
 
+inline struct cbm_file *find_cbm_file_entry(CBM *cbm,
+                                            char *filename)
+{
+    return find_file_entry(cbm, filename, NULL);
+}
+inline struct cbm_file *find_dummy_file_entry(CBM *cbm,
+                                              char *filename)
+{
+    return find_file_entry(cbm, NULL, filename);
+}
+
 // Returns the file type given the suffix.  Would be better as implemented
 // as an array of mapping structs, but this was quicker.
 static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
@@ -916,14 +927,14 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
 // Directory must be 0 for CBM files.
 //
 // This function may fail if we can't get a free entry (and can't reallocate
-// in which case NULL is returned.  Errno will also be set in this case.
+// in which case NULL is returned.  error will also be set in this case.
 struct cbm_file *create_file_entry(CBM *cbm,
                                    const enum file_source source,
                                    const char *filename,
                                    const char *suffix,
                                    const int directory,
                                    const off_t size,
-                                   int *errno)
+                                   int *error)
 {
     struct cbm_file *entry = NULL;
     int rc =-1;
@@ -934,10 +945,10 @@ struct cbm_file *create_file_entry(CBM *cbm,
     // Check assumptions constraints on inputs
     assert(cbm != NULL);
     assert(filename != NULL);
-    assert(errno != NULL);
-    assert((source == SOURCE_CBM) || (source == SOURCE_LINUX));
+    assert(error != NULL);
+    assert((source == SOURCE_CBM) || (source == SOURCE_DUMMY));
     assert(((source == SOURCE_CBM) && (!directory)) ||
-           (source == SOURCE_LINUX));
+           (source == SOURCE_DUMMY));
 
     // Run some initial sanity checks on the data
     if (source == SOURCE_CBM)
@@ -969,7 +980,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
     }
     else
     {
-        assert(source == SOURCE_LINUX);
+        assert(source == SOURCE_DUMMY);
     }
 
     // Now attempt to get an entry to fill in
@@ -994,7 +1005,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
         // Suffix should already have been stripped
         rc = remove_trailing_spaces(entry->cbm_filename[0]);
         assert(rc < MAX_CBM_FILENAME_STR_LEN-1);
-        rc = -1; // reset errno
+        rc = -1; // reset error
         entry->type = get_cbm_file_type_from_suffix(suffix);
         if (entry->type == CBM_DISK_HDR)
         {
@@ -1057,9 +1068,39 @@ EXIT:
     }
     assert((entry != NULL) || (rc != 0));
     assert(!(entry != NULL) && !(rc != 0));
-    *errno = rc;
+    *error = rc;
 
     DEBUG("EXIT: create_file_entry_cbm()");
 
     return entry;
+}
+
+inline struct cbm_file *create_cbm_file_entry(CBM *cbm,
+                                              const char *filename,
+                                              const char *suffix,
+                                              const off_t cbm_blocks,
+                                              int *error)
+{
+    return create_file_entry(cbm,
+                             SOURCE_CBM,
+                             filename,
+                             suffix,
+                             0,
+                             cbm_blocks,
+                             error);
+}
+
+inline struct cbm_file *create_dummy_file_entry(CBM *cbm,
+                                                const char *filename,
+                                                const int directory,
+                                                const off_t filesize,
+                                                int *error)
+{
+    return create_file_entry(cbm,
+                             SOURCE_DUMMY,
+                             filename,
+                             NULL,
+                             directory,
+                             filesize,
+                             error);
 }

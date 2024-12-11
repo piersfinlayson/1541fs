@@ -109,6 +109,7 @@ void cbm_destroy(void *private_data)
     }
 }
 
+// REWORK for cbm_file
 // Updated getattr function signature for FUSE3
 static int cbm_getattr(const char *path,
                        struct stat *stbuf,
@@ -176,6 +177,7 @@ static int cbm_getattr(const char *path,
     return rc;
 }
 
+// REWORK for cbm_file
 static int cbm_readdir(const char *path,
                        void *buf,
                        fuse_fill_dir_t filler,
@@ -307,6 +309,7 @@ EXIT:
     return 0;
 }
 
+// REWORK for cbm_file
 static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
 {
     int locked = 0;
@@ -417,6 +420,7 @@ EXIT:
     return rc;
 }
 
+// REWORK for cbm_file (doesn't use dir_entry but prob should!)
 static int cbm_release(const char *path, struct fuse_file_info *fi)
 {
     int locked = 0;
@@ -476,6 +480,7 @@ EXIT:
     return rc;
 }
 
+// DELETE (replaced by find_cbm_file_entry)
 static struct cbm_dir_entry *cbm_get_dir_entry(CBM *cbm,
                                                const char *filename)
 {
@@ -496,6 +501,7 @@ static struct cbm_dir_entry *cbm_get_dir_entry(CBM *cbm,
     return entry;
 }
 
+// REWORK for cbm_file
 static int cbm_read(const char *path,
                     char *buf,
                     size_t size,
@@ -643,6 +649,7 @@ EXIT:
     return rc;
 }
 
+// REWORK for cbm_file
 static int cbm_write(const char *path,
                      const char *buf,
                      size_t size,
