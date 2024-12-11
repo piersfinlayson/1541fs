@@ -225,8 +225,11 @@ struct cbm_file
 
     // Pointer to the contents of this file (to read).  Only suitable for
     // statically allocated strings - as the pointer will never (and should
-    // never) be freed up for these
-    const char *read_contents;
+    // never) be freed up for these.
+    // This is only valid for type == CBM_DUMMY_FILE, and doesn't have to be
+    // present - but if it's not present, cbmfile helper functions will not
+    // automagically handle returning its content.
+    const char *static_read_contents;
 };
 
 // Information about an entry from the disk directory.  May be either a header
@@ -430,7 +433,7 @@ extern struct cbm_file *create_file_entry(CBM *cbm,
                                           const char *suffix,
                                           const int directory,
                                           const off_t size,
-                                          const char *contents,
+                                          const char *static_read_contents,
                                           int *error);
 extern struct cbm_file *create_cbm_file_entry(CBM *cbm,
                                               const char *filename,
@@ -441,7 +444,7 @@ extern struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 const char *filename,
                                                 const int directory,
                                                 const off_t filesize,
-                                                const char *contents,
+                                                const char *static_read_contents,
                                                 int *error);
 
 // cbmfuse.c

@@ -937,7 +937,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
                                    const char *suffix,
                                    const int directory,
                                    const off_t size,
-                                   const char *contents,
+                                   const char *static_read_contents,
                                    int *error)
 {
     struct cbm_file *entry = NULL;
@@ -953,7 +953,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
     assert((source == SOURCE_CBM) || (source == SOURCE_DUMMY));
     assert(((source == SOURCE_CBM) && (!directory)) ||
            (source == SOURCE_DUMMY));
-    assert((contents == NULL) || (source == SOURCE_DUMMY));
+    assert((static_read_contents == NULL) || (source == SOURCE_DUMMY));
 
     // Run some initial sanity checks on the data
     if (source == SOURCE_CBM)
@@ -1036,7 +1036,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
                 CBM_FILE_TYPE_STR_LEN-1);
         if (directory)
         {
-            assert(contents == NULL);
+            assert(static_read_contents == NULL);
             entry->type = CBM_DUMMY_DIR;
         }
         else
@@ -1058,8 +1058,12 @@ struct cbm_file *create_file_entry(CBM *cbm,
     }
     else
     {
-        entry->filesize = size;
-        entry->read_contents = contents;
+        entry->static_read_contents = static_read_contents;
+        if (entry->static_read_contents != NULL)
+        {
+            entry->filesize = (off_t)strlen(static_read_contents);
+            assert((size == 0) || (size == entry->filesize));
+        }
     }
 
     // Set stat, ready to be provided to FUSE when requested
@@ -1102,7 +1106,7 @@ inline struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 const char *filename,
                                                 const int directory,
                                                 const off_t filesize,
-                                                const char *contents,
+                                                const char *static_read_contents,
                                                 int *error)
 {
     return create_file_entry(cbm,
@@ -1111,6 +1115,6 @@ inline struct cbm_file *create_dummy_file_entry(CBM *cbm,
                              NULL,
                              directory,
                              filesize,
-                             contents,
+                             static_read_contents,
                              error);
 }
