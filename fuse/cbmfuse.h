@@ -80,15 +80,18 @@ extern int current_log_level;
 #define CBM_BLOCK_SIZE 256
 #define MAX_CBM_FILENAME_STR_LEN 16+1 // 16 chars, plus 1 for NULL terminator
 #define MAX_FUSE_FILENAME_STR_LEN MAX_CBM_FILENAME_STR_LEN+1+3 // 1 for period, 3 for suffix
-#define CBM_ID_STR_LEN       2+1  // 2 chars, plus 1 for NULL terminator
+#define CBM_ID_STR_LEN       2+1      // 2 chars, plus 1 for NULL terminator
+#define CBM_FILE_TYPE_STR_LEN 3+1  // 3 chars, 1 terminator
 #define MAX_FILENAME_LEN 16+1+3+1 // 16 chars + 1 for period + 3 for file ending + 1 null terminator
 #define MAX_HEADER_LEN   16+1+2+1 // 16 chars + 1 for comma + 2 for ID + 1 null terminator
 #define MAX_FILE_LEN     16
 #define ID_LEN           2
 
+#define DELIM_FILE  "."
+#define DELIM_HDR   ","
+
 // We allocate the files array in cbm_state in blocks of tihs quantity
-#define CBM_FILE_REALLOCATE_QUANTITY  10 
-#define MAX_NUM_FILES ((2^15)-1) // Stored in a short
+#define CBM_FILE_REALLOCATE_QUANTITY  10
 
 // Special paths - declared in cmbfile.c
 extern const char *special_dirs[];
@@ -135,7 +138,8 @@ struct cbm_channel
     char filename[MAX_FILENAME_LEN];
 };
 
-enum cbm_file_type {
+enum cbm_file_type
+{
     // Used for entry cbm_file entries
     CBM_NONE,
 
@@ -161,6 +165,16 @@ enum cbm_file_type {
     // control
     CBM_DUMMY_FILE,
 };
+
+// Supported suffix which map to file types
+#define NUM_CBM_FILE_TYPES  4
+#define SUFFIX_PRG  "PRG"
+#define SUFFIX_SEQ  "SEQ"
+#define SUFFIX_REL  "REL"
+#define SUFFIX_USR  "USR"
+
+// Declared in cbmfile.c
+extern const enum cbm_file_type file_suffix_type_mapping[NUM_CBM_FILE_TYPES];
 
 // Information about a file.  This might be a file which actually exists on
 // the disk, one which has been created by the kernel but not yet written to
@@ -188,12 +202,12 @@ struct cbm_file
 
     // Number of Commodore disk (256 byte) blocks this file uses
     // Zero for CBM_DUMMY_DIR and CBM_DUMMY_FILE types
-    short cbm_blocks;
+    off_t cbm_blocks;
 
     // Size in bytes of the file.  0 until the file has been completely read
     // as we only know blocks until then.  Remains 0 for CBM_DUMMY_DIR and
     // CBM_DUMMY_FILE types
-    short cbm_filesize;
+    off_t cbm_filesize;
 };
 
 // Information about an entry from the disk directory.  May be either a header
@@ -375,6 +389,11 @@ extern void free_file_entry(CBM *cbm, struct cbm_file *file);
 extern struct cbm_file *find_file_entry(CBM *cbm,
                                         char *cbm_filename,
                                         char *fuse_filename);
+extern struct cbm_file *create_file_entry_cbm(CBM *cbm,
+                                              char *filename,
+                                              char *suffix,
+                                              off_t num_blocks,
+                                              int *errno);
 
 // cbmfuse.c
 extern void cbm_destroy(void *private_data);
