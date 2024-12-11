@@ -479,7 +479,8 @@ void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
     }
 }
 
-// Above here likely to be removed
+// Above here likely to be significantly reworked
+// * keep remove_trailing_spaces
 
 // Frees up any memory associated with file entrys in cbm_state.
 void destroy_files(CBM *cbm)
@@ -895,6 +896,10 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
 // Parses the filename and suffix, creates a cbm_file entry and returns a
 // pointer to that entry.
 //
+// For a FUSE file suffix should be empty - any suffix should be passed in
+// as part of the filename.  It is separate in the CBM case because it isn't
+// part of the filename
+//
 // For a CBM file the information passed in has come straight from a directory
 // listing so filename and suffix will be in PETSCII, and size will be number
 // of CBM blocks, not bytes or FUSE 512 byte blocks.
@@ -913,33 +918,49 @@ struct cbm_file *create_file_entry(CBM *cbm,
 {
     struct cbm_file *entry = NULL;
     int rc =-1;
+    size_t max_filename_len;
 
     DEBUG("ENTRY: create_file_entry()");
 
     // Check assumptions constraints on inputs
     assert(cbm != NULL);
     assert(filename != NULL);
-    assert(suffix != NULL);
     assert(errno != NULL);
     assert((source == SOURCE_CBM) || (source == SOURCE_LINUX));
     assert(((source == SOURCE_CBM) && (!directory)) ||
            (source == SOURCE_LINUX));
 
     // Run some initial sanity checks on the data
-    if (strlen(filename) >= MAX_CBM_FILENAME_STR_LEN)
+    if (source == SOURCE_CBM)
+    {
+        max_filename_len = MAX_CBM_FILENAME_STR_LEN;
+    }
+    else
+    {
+        max_filename_len = MAX_FUSE_FILENAME_STR_LEN;
+    }
+    if (strlen(filename) >= max_filename_len)
     {
         DEBUG("Filename is too long: %s", filename);
         rc = -ENAMETOOLONG;
         goto EXIT;
     }
 
-    assert(CBM_ID_STR_LEN <= CBM_FILE_TYPE_STR_LEN);
-    assert(DUMMY_FILE_SUFFIX_LEN <= CBM_FILE_TYPE_STR_LEN);
-    if (strnlen(suffix, CBM_FILE_TYPE_STR_LEN) >= CBM_FILE_TYPE_STR_LEN)
+    if (suffix != NULL)
     {
-        DEBUG("Suffix is too long: %s", suffix);
-        rc = -ENAMETOOLONG;
-        goto EXIT;
+        assert(source == SOURCE_CBM);
+        assert(CBM_ID_STR_LEN <= CBM_FILE_TYPE_STR_LEN);
+        assert(DUMMY_FILE_SUFFIX_LEN <= CBM_FILE_TYPE_STR_LEN);
+        if (strnlen(suffix, CBM_FILE_TYPE_STR_LEN) >= CBM_FILE_TYPE_STR_LEN)
+        {
+            DEBUG("Suffix is too long: %s", suffix);
+            rc = -ENAMETOOLONG;
+            goto EXIT;
+        }
+    }
+    else
+    {
+        assert(source == SOURCE_LINUX);
     }
 
     // Now attempt to get an entry to fill in
