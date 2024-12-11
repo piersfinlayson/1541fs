@@ -926,6 +926,9 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
 //
 // Directory must be 0 for CBM files.
 //
+// contents should only be provided for dummy files (not directories) and
+// should be statically allocated - as it will never be freed
+//
 // This function may fail if we can't get a free entry (and can't reallocate
 // in which case NULL is returned.  error will also be set in this case.
 struct cbm_file *create_file_entry(CBM *cbm,
@@ -934,6 +937,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
                                    const char *suffix,
                                    const int directory,
                                    const off_t size,
+                                   const char *contents,
                                    int *error)
 {
     struct cbm_file *entry = NULL;
@@ -949,6 +953,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
     assert((source == SOURCE_CBM) || (source == SOURCE_DUMMY));
     assert(((source == SOURCE_CBM) && (!directory)) ||
            (source == SOURCE_DUMMY));
+    assert((contents == NULL) || (source == SOURCE_DUMMY));
 
     // Run some initial sanity checks on the data
     if (source == SOURCE_CBM)
@@ -1031,6 +1036,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
                 CBM_FILE_TYPE_STR_LEN-1);
         if (directory)
         {
+            assert(contents == NULL);
             entry->type = CBM_DUMMY_DIR;
         }
         else
@@ -1040,7 +1046,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
         strncpy(entry->fuse_filename[0], filename, CBM_ID_STR_LEN-1);
     }
 
-    // Sort out filesizes
+    // Sort out filesizes (and contents)
     if (source == SOURCE_CBM)
     {
         entry->cbm_blocks = size;
@@ -1053,6 +1059,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
     else
     {
         entry->filesize = size;
+        entry->contents = contents;
     }
 
     // Set stat, ready to be provided to FUSE when requested
@@ -1087,6 +1094,7 @@ inline struct cbm_file *create_cbm_file_entry(CBM *cbm,
                              suffix,
                              0,
                              cbm_blocks,
+                             NULL,
                              error);
 }
 
@@ -1094,6 +1102,7 @@ inline struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 const char *filename,
                                                 const int directory,
                                                 const off_t filesize,
+                                                const char *contents,
                                                 int *error)
 {
     return create_file_entry(cbm,
@@ -1102,5 +1111,6 @@ inline struct cbm_file *create_dummy_file_entry(CBM *cbm,
                              NULL,
                              directory,
                              filesize,
+                             contents,
                              error);
 }

@@ -39,6 +39,7 @@ extern int current_log_level;
 #define DEBUG(format, ...)
 #endif
 
+// DELETE - replaced by cbmdummy.c
 // What will be read out of format_disk
 #define FORMAT_CONTENTS \
     "To format a disk write the new disk name followed by the ID to this file.\n" \
@@ -221,6 +222,11 @@ struct cbm_file
     // We set to 0 for CBM_DUMMY_DIR and CBM_DUMMY_FILE types (unless we
     // decide to expose a different value)
     off_t filesize;
+
+    // Pointer to the contents of this file.  Only suitable for statically
+    // allocated strings - as the pointer will never (and should never) be
+    // freed up for these
+    const char *contents;
 };
 
 // Information about an entry from the disk directory.  May be either a header
@@ -381,6 +387,12 @@ typedef struct cbm_state
     size_t max_num_files;
 } CBM;
 
+struct dummy_files
+{
+    const char *filename;
+    const char *contents;
+};
+
 // cbmargs.c
 extern int process_args(struct fuse_args *args, CBM *cbm);
 extern void destroy_args(CBM *cbm);
@@ -390,6 +402,9 @@ extern int allocate_free_channel(CBM *cbm,
                                  enum cbm_channel_usage usage,
                                  const char *filename);
 extern void release_channel(CBM *cbm, int ch);
+
+// cbmdummy.c
+extern const struct dummy_files dummy_files[];
 
 // cbmfile.c
 extern int read_dir_from_disk(CBM *cbm);
@@ -412,6 +427,7 @@ extern struct cbm_file *create_file_entry(CBM *cbm,
                                           const char *suffix,
                                           const int directory,
                                           const off_t size,
+                                          const char *contents,
                                           int *error);
 extern struct cbm_file *create_cbm_file_entry(CBM *cbm,
                                               const char *filename,
@@ -422,6 +438,7 @@ extern struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 const char *filename,
                                                 const int directory,
                                                 const off_t filesize,
+                                                const char *contents,
                                                 int *error);
 
 // cbmfuse.c
