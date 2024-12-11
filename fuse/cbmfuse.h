@@ -86,9 +86,12 @@ extern int current_log_level;
 #define MAX_HEADER_LEN   16+1+2+1 // 16 chars + 1 for comma + 2 for ID + 1 null terminator
 #define MAX_FILE_LEN     16
 #define ID_LEN           2
+#define DUMMY_FILE_SUFFIX_LEN 3+1
 
 #define DELIM_FILE  "."
 #define DELIM_HDR   ","
+
+#define DUMMY_FILE_SUFFIX "cmd"
 
 // We allocate the files array in cbm_state in blocks of tihs quantity
 #define CBM_FILE_REALLOCATE_QUANTITY  10
@@ -173,8 +176,12 @@ enum cbm_file_type
 #define SUFFIX_REL  "REL"
 #define SUFFIX_USR  "USR"
 
-// Declared in cbmfile.c
-extern const enum cbm_file_type file_suffix_type_mapping[NUM_CBM_FILE_TYPES];
+// Used by create_file_entry() in cbmfile.c
+enum file_source
+{
+    SOURCE_CBM,
+    SOURCE_LINUX,
+};
 
 // Information about a file.  This might be a file which actually exists on
 // the disk, one which has been created by the kernel but not yet written to
@@ -204,10 +211,12 @@ struct cbm_file
     // Zero for CBM_DUMMY_DIR and CBM_DUMMY_FILE types
     off_t cbm_blocks;
 
-    // Size in bytes of the file.  0 until the file has been completely read
-    // as we only know blocks until then.  Remains 0 for CBM_DUMMY_DIR and
-    // CBM_DUMMY_FILE types
-    off_t cbm_filesize;
+    // Size in bytes of the file.
+    // For a CBM file this is 0 until the file has been completely read
+    // as we only know blocks until then.
+    // We set to 0 for CBM_DUMMY_DIR and CBM_DUMMY_FILE types (unless we
+    // decide to expose a different value)
+    off_t filesize;
 };
 
 // Information about an entry from the disk directory.  May be either a header
@@ -389,11 +398,29 @@ extern void free_file_entry(CBM *cbm, struct cbm_file *file);
 extern struct cbm_file *find_file_entry(CBM *cbm,
                                         char *cbm_filename,
                                         char *fuse_filename);
-extern struct cbm_file *create_file_entry_cbm(CBM *cbm,
-                                              char *filename,
-                                              char *suffix,
-                                              off_t num_blocks,
-                                              int *errno);
+extern struct cbm_file *create_file_entry(CBM *cbm,
+                                          const enum file_source source,
+                                          const char *filename,
+                                          const char *suffix,
+                                          const int directory,
+                                          const off_t size,
+                                          int *errno);
+#define create_file_entry_cbm(CBM, FILENAME, SUFFIX, CBM_BLKS, ERRNO) \
+        create_file_entry(CBM,        \
+                          FILENAME,   \
+                          SUFFIX,     \
+                          SOURCE_CBM, \
+                          0,          \
+                          CBM_BLKS,   \
+                          ERRNO)
+#define create_file_entry_dummy(CBM, FILENAME, SUFFIX, ISDIR, FILESIZE, ERRNO) \
+        create_file_entry(CBM,        \
+                          FILENAME,   \
+                          SUFFIX,     \
+                          SOURCE_CBM, \
+                          ISDIR,      \
+                          FILESIZE,   \
+                          ERRNO)
 
 // cbmfuse.c
 extern void cbm_destroy(void *private_data);
