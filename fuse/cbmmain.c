@@ -2,7 +2,7 @@
 
 static CBM *allocate_private_data(void)
 {
-    DEBUG("ENTRY: allocate_private_data()");
+    ENTRY();
 
     // Allocate and zero memory
     CBM *cbm = malloc(sizeof(struct cbm_state));
@@ -21,7 +21,7 @@ static CBM *allocate_private_data(void)
 
 EXIT:
 
-    DEBUG("EXIT:  allocate_private_data()");
+    EXIT();
 
     return cbm;
 } 
@@ -29,7 +29,7 @@ EXIT:
 // Not static, as called by handle_signal()
 void destroy_private_data(CBM *cbm, int clean)
 {
-    DEBUG("ENTRY: destroy_private_data()");
+    ENTRY();
 
     // handle_signal() doesn't want to attempt a clean shutdown as it may fail
     // and hang
@@ -41,12 +41,12 @@ void destroy_private_data(CBM *cbm, int clean)
     destroy_files(cbm);
     free(cbm);
 
-    DEBUG("EXIT:  destroy_private_data()");
+    EXIT();
 }
 
 static void cleanup_fuse(CBM *cbm)
 {
-    DEBUG("ENTRY: cleanup_fuse()");
+    ENTRY();
     
     if (cbm != NULL)
     {
@@ -65,7 +65,7 @@ static void cleanup_fuse(CBM *cbm)
         }
     }
 
-    DEBUG("EXIT:  cleanup_fuse()");
+    EXIT();
 }
 
 int main(int argc, char *argv[])

@@ -496,7 +496,7 @@ void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
 // Frees up any memory associated with file entrys in cbm_state.
 void destroy_files(CBM *cbm)
 {
-    DEBUG("ENTRY: destroy_files()");
+    ENTRY();
 
     if (cbm->dir_entries != NULL)
     {
@@ -509,7 +509,7 @@ void destroy_files(CBM *cbm)
         cbm->files = NULL;
     }
 
-    DEBUG("EXIT:  destroy_files()");
+    EXIT();
 }
 
 // Fills in the fuse_filename field in a cbm_file struct, assuming that the
@@ -519,7 +519,7 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
     char *suffix;
     char *delim = DELIM_FILE;
 
-    DEBUG("ENTRY: update_fuse_filename_from_cbm()");
+    ENTRY();
 
     assert(entry != NULL);
     assert((entry->type == CBM_PRG) ||
@@ -571,7 +571,7 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
             suffix,
             3);
 
-    DEBUG("EXIT:  update_fuse_filename_from_cbm()");
+    EXIT();
 
     return;
 }
@@ -583,7 +583,7 @@ static void update_fuse_stat(struct cbm_file *entry)
 {
     off_t max_filesize;
 
-    DEBUG("ENTRY: update_fuse_stat()");
+    ENTRY();
 
     assert(entry != NULL);
     assert(entry->type != CBM_NONE);
@@ -665,7 +665,7 @@ static void update_fuse_stat(struct cbm_file *entry)
             break;
     }
 
-    DEBUG("EXIT:  update_fuse_stat()");
+    EXIT();
 
     return;
 }
@@ -683,7 +683,7 @@ struct cbm_file *get_next_free_file_entry(CBM *cbm)
     struct cbm_file *new_files;
     struct cbm_file *next_file;
 
-    DEBUG("ENTRY: get_next_free_file_entry()");
+    ENTRY();
 
     assert(cbm != NULL);
     assert(cbm->max_num_files >= cbm->num_files);
@@ -718,7 +718,7 @@ struct cbm_file *get_next_free_file_entry(CBM *cbm)
         next_file = NULL;
     }
 
-    DEBUG("EXIT:  get_next_free_file_entry()");
+    EXIT();
 
     return next_file;
 }
@@ -731,7 +731,7 @@ struct cbm_file *get_next_free_file_entry(CBM *cbm)
 // hysteresis
 void free_file_entry(CBM *cbm, struct cbm_file *file)
 {
-    DEBUG("ENTRY: free_file_entry()");
+    ENTRY();
     
     // Validate inputs
     assert(cbm != NULL);
@@ -803,7 +803,7 @@ void free_file_entry(CBM *cbm, struct cbm_file *file)
         // If realloc fails, we just keep the existing larger buffer
     }
     
-    DEBUG("EXIT:  free_file_entry()");
+    EXIT();
 
     return;
 }
@@ -820,7 +820,7 @@ struct cbm_file *find_file_entry(CBM *cbm,
     off_t offset;
     struct cbm_file *entry = NULL;
 
-    DEBUG("ENTRY: find_file_entry()");
+    ENTRY();
 
     assert(cbm != NULL);
     assert(cbm->max_num_files >= cbm->num_files);
@@ -855,7 +855,7 @@ struct cbm_file *find_file_entry(CBM *cbm,
         }
     }
 
-    DEBUG("EXIT:  find_file_entry()");
+    EXIT();
 
     return entry;
 }
@@ -877,7 +877,7 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
 {
     enum cbm_file_type type = CBM_NONE;
 
-    DEBUG("ENTRY: get_cbm_file_type_from_suffix()");
+    ENTRY();
 
    if (strlen(suffix) == ID_LEN)
     {
@@ -904,7 +904,7 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
         }
     }
 
-    DEBUG("EXIT:  get_cbm_file_type_from_suffix()");
+    EXIT();
 
     return type;
 }
@@ -946,7 +946,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
     int rc =-1;
     size_t max_filename_len;
 
-    DEBUG("ENTRY: create_file_entry()");
+    ENTRY();
 
     // Check assumptions constraints on inputs
     assert(cbm != NULL);
@@ -1080,7 +1080,7 @@ EXIT:
     assert(!(entry != NULL) && !(rc != 0));
     *error = rc;
 
-    DEBUG("EXIT:  create_file_entry_cbm()");
+    EXIT();
 
     return entry;
 }

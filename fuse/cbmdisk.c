@@ -7,8 +7,8 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
     int rc = -1;
     int rc2;
 
-    DEBUG("ENTRY: process_format_request()");
-
+    ENTRY();
+    
     // For length, 1 char longer is actually OK if ends with \r or \n
     if (size > (MAX_HEADER_LEN))
     {
@@ -116,7 +116,7 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
 
 EXIT:
 
-    DEBUG("EXIT:  process_format_request()");
+    EXIT();
 
     return rc;
 }

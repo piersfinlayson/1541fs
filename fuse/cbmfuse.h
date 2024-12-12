@@ -35,8 +35,18 @@ extern int current_log_level;
 #ifdef DEBUG_BUILD
 #define DEBUG(format, ...) \
     if (current_log_level >= LOG_DEBUG) syslog(LOG_DEBUG, format, ##__VA_ARGS__)
+#define ENTRY(...) \
+    if (current_log_level >= LOG_DEBUG) \
+        syslog(LOG_DEBUG, "ENTRY: %s()", __func__, ##__VA_ARGS__);
+#define EXIT(...) \
+    if (current_log_level >= LOG_DEBUG) \
+        syslog(LOG_DEBUG, "EXIT:  %s()", __func__, ##__VA_ARGS__);
+#define PARAMS DEBUG
 #else // DEBUG_BUILD
 #define DEBUG(format, ...)
+#define ENTRY(...)
+#define EXIT(...)
+#define PARAMS(format, ...)
 #endif
 
 // DELETE - replaced by cbmdummy.c

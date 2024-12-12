@@ -98,11 +98,11 @@ static int handle_dummy_open(CBM *cbm,
     (void)path;
     (void)fi;
 
-    DEBUG("ENTRY: handle_dummy_open()");
+    ENTRY();
 
     rc = check_dummy_valid(handle);
 
-    DEBUG("EXIT:  handle_dummy_open()");
+    EXIT();
 
     return rc;
 }
@@ -119,11 +119,11 @@ static int handle_dummy_release(CBM *cbm,
     (void)path;
     (void)fi;
 
-    DEBUG("ENTRY: handle_dummy_release()");
+    ENTRY();
 
     rc = check_dummy_valid(handle);
 
-    DEBUG("EXIT:  handle_dummy_release()");
+    EXIT();
 
     return rc;
 }
@@ -144,7 +144,7 @@ static int handle_dummy_read(CBM *cbm,
     (void)path;
     (void)fi;
 
-    DEBUG("ENTRY: handle_dummy_read()");
+    ENTRY();
 
     rc = check_dummy_valid(handle);
 
@@ -173,7 +173,7 @@ static int handle_dummy_read(CBM *cbm,
 
 EXIT:
 
-    DEBUG("EXIT:  handle_dummy_read()");
+    EXIT();
 
     return rc;
 }
@@ -196,7 +196,7 @@ static int handle_dummy_write(CBM *cbm,
     (void)size;
     (void)offset;
 
-    DEBUG("ENTRY: handle_dummy_write()");
+    ENTRY();
 
     rc = check_dummy_valid(handle);
 
@@ -247,7 +247,7 @@ static int handle_dummy_write(CBM *cbm,
 
 EXIT:
 
-    DEBUG("EXIT:  handle_dummy_write()");
+    EXIT();
 
     return rc;
 }
@@ -268,7 +268,7 @@ int create_dummy_entries(CBM *cbm)
     };
     const struct dummy_entry *entry;
 
-    DEBUG("ENTRY: create_dummy_entries()");
+    ENTRY();
 
     assert(cbm != NULL);
 
@@ -305,7 +305,7 @@ int create_dummy_entries(CBM *cbm)
 
 EXIT:
 
-    DEBUG("EXIT:  create_dummy_entries()");
+    EXIT();
 
     return rc;
 }

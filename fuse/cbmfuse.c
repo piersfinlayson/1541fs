@@ -125,7 +125,8 @@ static int cbm_getattr(const char *path,
     assert(path != NULL);
     assert(stbuf != NULL);
 
-    DEBUG("ENTRY: cbm_getattr(), path: %s", path);
+    ENTRY();
+    PARAMS("Path %s", path);
 
     pthread_mutex_lock(&(cbm->mutex));
 
@@ -184,7 +185,7 @@ static int cbm_getattr(const char *path,
 
     pthread_mutex_unlock(&(cbm->mutex));
 
-    DEBUG("EXIT:  cbm_getattr()");
+    EXIT();
 
     return rc;
 }
@@ -213,7 +214,8 @@ static int cbm_readdir(const char *path,
 
     assert(path != NULL);
 
-    DEBUG("ENTRY: cbm_readdir() path: %s offset: %ld flags: 0x%x",
+    ENTRY();
+    PARAMS("Path %s offset %ld flags 0x%x",
           path,
           offset,
           flags);
@@ -323,7 +325,7 @@ EXIT:
     pthread_mutex_unlock(&(cbm->mutex));
     }
 
-    DEBUG("EXIT:  cbm_readdir()");
+    EXIT();
 
     return 0;
 }
@@ -342,7 +344,8 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     assert(cbm != NULL);
     assert(fi != NULL);
 
-    DEBUG("ENTRY: cbm_fuseopen() path: %s", path);
+    ENTRY();
+    PARAMS("Path %s", path);
 
     if (strlen(path) > (MAX_FILENAME_LEN-1))
     {
@@ -436,7 +439,7 @@ EXIT:
         pthread_mutex_unlock(&(cbm->mutex));
     }
 
-    DEBUG("EXIT:  cbm_fuseopen()");
+    EXIT();
 
     return rc;
 }
@@ -451,7 +454,7 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
     struct cbm_channel *channel;
     const char *actual_path;
 
-    DEBUG("ENTRY: cbm_release()");
+    ENTRY();
 
     CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
@@ -514,7 +517,7 @@ EXIT:
         pthread_mutex_unlock(&(cbm->mutex));
     }
 
-    DEBUG("EXIT:  cbm_release()");
+    EXIT();
 
     return rc;
 }
@@ -564,7 +567,8 @@ static int cbm_read(const char *path,
     assert(fi != NULL);
     assert(offset >= 0);
 
-    DEBUG("ENTRY: cbm_read() path %s size: %lu offset:%ld", path, size, offset);
+    ENTRY();
+    PARAMS("Path %s Size %lu Offset %ld", path, size, offset);
 
     ch = (int)(fi->fh);
 
@@ -873,7 +877,8 @@ static int cbm_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     (void)fi;
     (void)mode;  // We can avoid mode, because we don't bother with file permissions
 
-    DEBUG("ENTRY: cbm_create path: %s", path);
+    ENTRY();
+    PARAMS("path %s", path);
 
     CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
@@ -899,7 +904,7 @@ static int cbm_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
 EXIT:
 
-    DEBUG("EXIT:  cbm_create");
+    EXIT();
 
     return rc;
 }
