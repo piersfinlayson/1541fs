@@ -184,7 +184,7 @@ static int cbm_getattr(const char *path,
 
     pthread_mutex_unlock(&(cbm->mutex));
 
-    DEBUG("EXIT: cbm_getattr()");
+    DEBUG("EXIT:  cbm_getattr()");
 
     return rc;
 }
@@ -200,11 +200,10 @@ static int cbm_readdir(const char *path,
     int rc;
     struct cbm_dir_entry entry;
     struct stat stbuf;
+    int locked = 0;
 
     CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
-
-    pthread_mutex_lock(&(cbm->mutex));
 
     (void)fi;
 #ifndef DEBUG_BUILD
@@ -219,46 +218,18 @@ static int cbm_readdir(const char *path,
           offset,
           flags);
 
-    // Check we support the directory being queried.
-    DEBUG("Check if we support this path: %s", path);
-    if (!is_special_dir(path))
-    {
-        DEBUG("Attempt to read non-existant path: %s", path);
-        rc = -ENOENT;
-        goto EXIT;
-    }
+    pthread_mutex_lock(&(cbm->mutex));
+    locked = 1;
 
     // If the path isn't / we return nothing (no files)
     if (strcmp(path, "/"))
     {
-        DEBUG("Special path, not / - exiting");
+        DEBUG("Attempt to read path with isn't / - exiting");
         rc = -ENOENT;
         goto EXIT;
     }
-
-    // Re-read the disk if we didn't read cleanly last time
-    DEBUG("Check if need to reread directory listing");
-    if (!cbm->dir_is_clean)
-    {
-        rc = read_dir_from_disk(cbm);
-        if (rc)
-        {
-            DEBUG("Failed to load directory listing");
-            goto EXIT;
-        }
-
-        // We did successfully re-read, but we don't return any files here
-        // as that would indicate that there are files below the reread
-        // special dir
-        rc = -ENOENT;
-        goto EXIT; 
-    }
-
-    assert(cbm->dir_is_clean);
-
     // Add any special directories not in dir_entries first
     DEBUG("Fill in special directories");
-
     int ii;
     const char *sd;
     for (ii = 0, sd = special_dirs[ii]; sd != NULL; ii++, sd = special_dirs[ii])
@@ -309,7 +280,28 @@ static int cbm_readdir(const char *path,
         }
     }
 
-    // Now create an entry for each file
+    // Now onto files that are actually on the disk
+
+    // Re-read the disk if we didn't read cleanly last time
+    if (!cbm->dir_is_clean)
+    {
+        DEBUG("Re-eread directory listing from disk");
+        rc = read_dir_from_disk(cbm);
+        if (rc)
+        {
+            DEBUG("Failed to load directory listing");
+            goto EXIT;
+        }
+
+        // We did successfully re-read, but we don't return any files here
+        // as that would indicate that there are files below the reread
+        // special dir
+        rc = -ENOENT;
+        goto EXIT; 
+    }
+    assert(cbm->dir_is_clean);
+
+    // Create an entry for each file
     DEBUG("Add files from disk to directory listing");
     for (ii = 0; ii < cbm->num_dir_entries; ii++)
     {
@@ -326,7 +318,10 @@ static int cbm_readdir(const char *path,
 
 EXIT:
 
+    if (locked)
+    {
     pthread_mutex_unlock(&(cbm->mutex));
+    }
 
     DEBUG("EXIT:  cbm_readdir()");
 
@@ -352,9 +347,11 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     if (strlen(path) > (MAX_FILENAME_LEN-1))
     {
         WARN("Request to open file with filename exceeding max length failed: %s", path);
+        rc = -ENAMETOOLONG;
         goto EXIT;
     }
 
+    // Special file - just return OK using dummy channel
     if (is_special_file(path))
     {
         DEBUG("Request to open special file: %s", path);
@@ -378,7 +375,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     }
 
     // Copy path to actual_path (discardig leading /), so we can convert
-    // to petscii later
+    // to petscii later.  We already asserted path wasn't too long too copy
     strcpy(actual_path, path+1);
 
     // Lookup the file in dir_entries
@@ -393,8 +390,8 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         }
     }
 
-    // Note it's OK if we didn't find a file - we will create it
-
+    // It's OK if we didn't find a file - we will create it
+    // This would be the case where we wanted to write the file, for example
     if ((entry != NULL) && entry->is_header)
     {
         // Header is a special case - there's no file to open
@@ -410,6 +407,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     if (ch < 0)
     {
         WARN("Failed to allocate a free channel to open file: %s", actual_path);
+        rc = -EMFILE; // Too many open files
         goto EXIT;
     }
 
@@ -424,7 +422,6 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         (void)rc2;
         WARN("Failed to open file: %s channel: %d", actual_path, ch);
         WARN("Drive status: %d %s", rc, cbm->error_buffer);
-        rc = -1;
         goto EXIT;
     }
     
@@ -439,7 +436,7 @@ EXIT:
         pthread_mutex_unlock(&(cbm->mutex));
     }
 
-    DEBUG("EXIT: cbm_fuseopen()");
+    DEBUG("EXIT:  cbm_fuseopen()");
 
     return rc;
 }
@@ -454,6 +451,8 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
     struct cbm_channel *channel;
     const char *actual_path;
 
+    DEBUG("ENTRY: cbm_release()");
+
     CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
@@ -461,6 +460,8 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
     ch = (int)(fi->fh);
     actual_path = path+1;
 
+    // Just OK releasing the dummy channel - as we didn't do anything when
+    // opening it
     if (ch == DUMMY_CHANNEL)
     {
         DEBUG("Release for dummy file: %s", actual_path);
@@ -471,6 +472,7 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
     pthread_mutex_lock(&(cbm->mutex));
     locked = 1;
 
+    // Get the channel based on the handle
     assert((ch >= 0) && (ch < NUM_CHANNELS));
     channel = cbm->channel+ch;
     if (strcmp(actual_path, channel->filename))
@@ -487,11 +489,10 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
         (void)rc2;
         WARN("Hit error closing channel %d %d", ch, rc);
         WARN("Drive status: %s", cbm->error_buffer);
-        rc = -1;
         goto EXIT;
     }
 
-    // Clear the handles
+    // Clear the channel handles
     if (channel->handle1 != NULL)
     {
         DEBUG("Freeing buffer stored in channel");
@@ -500,9 +501,11 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
         channel->handle2 = 0;
     }
 
+    // Release channel back to pool
     release_channel(cbm, ch);
+
     rc = 0;
-    DEBUG("Release for file: %s channel: %d", actual_path, ch);
+    DEBUG("Release %s channel %d", actual_path, ch);
 
 EXIT:
 
@@ -510,6 +513,8 @@ EXIT:
     {
         pthread_mutex_unlock(&(cbm->mutex));
     }
+
+    DEBUG("EXIT:  cbm_release()");
 
     return rc;
 }
@@ -629,18 +634,20 @@ static int cbm_read(const char *path,
         goto EXIT;
     }
 
-    rc = cbm_talk(cbm->fd, cbm->device_num, (unsigned char)ch);
-    if (rc)
-    {
-        rc = check_drive_status(cbm);
-        (void)rc;
-        WARN("Hit error instructing drive to talk, to read file %s channel %d", actual_path, ch);
-        WARN("Drive status: %s", cbm->error_buffer);
-        goto EXIT;
-    }
-
+    // Only read in the file if we haven't already - in which case it will
+    // be stored in handle1 (with length read in handle2) 
     if (channel->handle1 == NULL)
     {
+        rc = cbm_talk(cbm->fd, cbm->device_num, (unsigned char)ch);
+        if (rc)
+        {
+            rc = check_drive_status(cbm);
+            (void)rc;
+            WARN("Hit error instructing drive to talk, to read file %s channel %d", actual_path, ch);
+            WARN("Drive status: %s", cbm->error_buffer);
+            goto EXIT;
+        }
+
         int read_block_size = CBM_BLOCK_SIZE;
         DEBUG("Read in file in %d byte chunks", read_block_size);
 
@@ -658,7 +665,7 @@ static int cbm_read(const char *path,
         while (total_read < len)
         {
             off_t to_read = (len - total_read < read_block_size) ? len - total_read : read_block_size;
-            rc = cbm_raw_read(cbm->fd, buf + total_read, (size_t)to_read);
+            rc = cbm_raw_read(cbm->fd, temp_buf + total_read, (size_t)to_read);
             if (rc < 0)
             {
                 rc2 = check_drive_status(cbm);
@@ -682,27 +689,35 @@ static int cbm_read(const char *path,
         // Remember, len is not the file system - it was our estimate of the 
         // filesize, based on the number of blocks the file took on the disk.
         // If the reading didn't hit an error then we can reasonably assume we
-        // read the whole file - so update the filesize stat 
-        if ((unsigned int)total_read < len) {
-            INFO("Actual size of file %s channel %d is %lu bytes vs %d", actual_path, ch, total_read, len);
-            entry->filesize = (unsigned int)total_read;
-        }
+        // read the whole file - so update the filesize
+        DEBUG("Size of file %s channel %d is %lu bytes", actual_path, ch, total_read);
+        entry->filesize = (unsigned int)total_read;
+
+        // Store off the file in the channel handles so we don't need to
+        // re-read if the kernel wants more of the file before releasing
+        assert(channel->handle1 == NULL);
+        assert(channel->handle2 == 0);
+        channel->handle1 = temp_buf;
+        temp_buf = NULL;
+        channel->handle2 = (int)total_read;
     }
     else
     {
+        // As we already read the file in, and updated the size in entry->filesize - check that
         DEBUG("Already have this file read in - use it");
-        temp_buf = channel->handle1;
-        total_read = channel->handle2;
+        assert(channel->handle2 == (int)entry->filesize);
     }
 
+    DEBUG("Handle1 0x%p handle2 %d", channel->handle1, channel->handle2);
 
-    if ((unsigned int)offset < total_read)
+    // Only prove the bit of the file FUSE asked for
+    if (offset < channel->handle2)
     {
-        if ((size_t)offset + size > (size_t)total_read)
+        if ((size_t)offset + size > (size_t)channel->handle2)
         {
-            size = (size_t)total_read - (size_t)offset;
+            size = (size_t)channel->handle2 - (size_t)offset;
         }
-        memcpy(buf, temp_buf+offset, size);
+        memcpy(buf, ((char *)channel->handle1)+offset, size);
     }
     else
     {
@@ -710,11 +725,10 @@ static int cbm_read(const char *path,
     }
     rc = (int)size;
 
-    // Store this off in the channel info, so we don't need to read
+    // Store the file off in the channel info, so we don't need to read
     // again if the kernel asks us for more of the file.
-    channel->handle1 = temp_buf;
-    temp_buf = NULL;
-    channel->handle2 = (int)total_read;
+    // We may not need to do this ... if we got the buffer from the handle
+    // in the first place.  But we also set temp_buf, 
 
 EXIT:
 
@@ -885,7 +899,7 @@ static int cbm_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
 EXIT:
 
-    DEBUG("EXIT: cbm_create");
+    DEBUG("EXIT:  cbm_create");
 
     return rc;
 }

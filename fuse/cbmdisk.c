@@ -116,7 +116,7 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
 
 EXIT:
 
-    DEBUG("EXIT: process_format_request()");
+    DEBUG("EXIT:  process_format_request()");
 
     return rc;
 }

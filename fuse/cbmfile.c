@@ -1,5 +1,7 @@
 #include "cbmfuse.h"
 
+// Contains code for dealing with cbm_file entries
+
 // KEEP - rename?
 // Special paths
 // Must not begin or terminate the / or FUSE will barf
@@ -507,7 +509,7 @@ void destroy_files(CBM *cbm)
         cbm->files = NULL;
     }
 
-    DEBUG("EXIT: destroy_files()");
+    DEBUG("EXIT:  destroy_files()");
 }
 
 // Fills in the fuse_filename field in a cbm_file struct, assuming that the
@@ -569,7 +571,7 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
             suffix,
             3);
 
-    DEBUG("EXIT: update_fuse_filename_from_cbm()");
+    DEBUG("EXIT:  update_fuse_filename_from_cbm()");
 
     return;
 }
@@ -663,7 +665,7 @@ static void update_fuse_stat(struct cbm_file *entry)
             break;
     }
 
-    DEBUG("EXIT: update_fuse_stat()");
+    DEBUG("EXIT:  update_fuse_stat()");
 
     return;
 }
@@ -716,7 +718,7 @@ struct cbm_file *get_next_free_file_entry(CBM *cbm)
         next_file = NULL;
     }
 
-    DEBUG("EXIT: get_next_free_file_entry()");
+    DEBUG("EXIT:  get_next_free_file_entry()");
 
     return next_file;
 }
@@ -801,7 +803,7 @@ void free_file_entry(CBM *cbm, struct cbm_file *file)
         // If realloc fails, we just keep the existing larger buffer
     }
     
-    DEBUG("EXIT: free_file_entry()");
+    DEBUG("EXIT:  free_file_entry()");
 
     return;
 }
@@ -853,7 +855,7 @@ struct cbm_file *find_file_entry(CBM *cbm,
         }
     }
 
-    DEBUG("EXIT: find_file_entry()");
+    DEBUG("EXIT:  find_file_entry()");
 
     return entry;
 }
@@ -902,7 +904,7 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
         }
     }
 
-    DEBUG("EXIT: get_cbm_file_type_from_suffix()");
+    DEBUG("EXIT:  get_cbm_file_type_from_suffix()");
 
     return type;
 }
@@ -1078,7 +1080,7 @@ EXIT:
     assert(!(entry != NULL) && !(rc != 0));
     *error = rc;
 
-    DEBUG("EXIT: create_file_entry_cbm()");
+    DEBUG("EXIT:  create_file_entry_cbm()");
 
     return entry;
 }

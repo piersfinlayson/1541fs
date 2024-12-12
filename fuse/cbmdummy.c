@@ -102,7 +102,7 @@ static int handle_dummy_open(CBM *cbm,
 
     rc = check_dummy_valid(handle);
 
-    DEBUG("EXIT: handle_dummy_open()");
+    DEBUG("EXIT:  handle_dummy_open()");
 
     return rc;
 }
@@ -123,7 +123,7 @@ static int handle_dummy_release(CBM *cbm,
 
     rc = check_dummy_valid(handle);
 
-    DEBUG("EXIT: handle_dummy_release()");
+    DEBUG("EXIT:  handle_dummy_release()");
 
     return rc;
 }
@@ -173,7 +173,7 @@ static int handle_dummy_read(CBM *cbm,
 
 EXIT:
 
-    DEBUG("EXIT: handle_dummy_read()");
+    DEBUG("EXIT:  handle_dummy_read()");
 
     return rc;
 }
@@ -247,7 +247,7 @@ static int handle_dummy_write(CBM *cbm,
 
 EXIT:
 
-    DEBUG("EXIT: handle_dummy_write()");
+    DEBUG("EXIT:  handle_dummy_write()");
 
     return rc;
 }
@@ -305,7 +305,7 @@ int create_dummy_entries(CBM *cbm)
 
 EXIT:
 
-    DEBUG("EXIT: create_dummy_entries()");
+    DEBUG("EXIT:  create_dummy_entries()");
 
     return rc;
 }

@@ -21,7 +21,7 @@ static CBM *allocate_private_data(void)
 
 EXIT:
 
-    DEBUG("EXIT: allocate_private_data()");
+    DEBUG("EXIT:  allocate_private_data()");
 
     return cbm;
 } 
@@ -41,7 +41,7 @@ void destroy_private_data(CBM *cbm, int clean)
     destroy_files(cbm);
     free(cbm);
 
-    DEBUG("EXIT: destroy_private_data()");
+    DEBUG("EXIT:  destroy_private_data()");
 }
 
 static void cleanup_fuse(CBM *cbm)
@@ -65,7 +65,7 @@ static void cleanup_fuse(CBM *cbm)
         }
     }
 
-    DEBUG("EXIT: cleanup_fuse()");
+    DEBUG("EXIT:  cleanup_fuse()");
 }
 
 int main(int argc, char *argv[])

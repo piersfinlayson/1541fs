@@ -80,6 +80,11 @@ void release_channel(CBM *cbm, int ch)
 
     assert(cbm->channel[ch].num == ch);
     assert(cbm->channel[ch].open);
+    
+    // Check that any handles were cleared (because caller should have)
+    // freed any allocated memory stored in them, etc
+    assert(cbm->channel[ch].handle1 == NULL);
+    assert(cbm->channel[ch].handle2 == 0);
 
     memset(cbm->channel+ch, 0, sizeof(struct cbm_channel));
     cbm->channel[ch].num = (unsigned char)ch;
