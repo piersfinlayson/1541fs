@@ -104,6 +104,7 @@ extern int current_log_level;
 // Special paths - declared in cmbfile.c
 extern const char *special_dirs[];
 
+// DELETE
 // Special files - declared in cbmfiles.c
 #define PATH_FORCE_DISK_REREAD  "disk_reread.cmd" // Could use header for this
 #define PATH_FORMAT_DISK        "format_disk.cmd"       // Could also use header for this
@@ -144,6 +145,13 @@ struct cbm_channel
     // If usage is USAGE_OPEN (channels 2-14) and open is 1, stores the file
     // of the filename opened
     char filename[MAX_FILENAME_LEN];
+
+    // Opaque handles stored on behalf of code handling open/release/read/write
+    // operations.  May be used, for example, to store the entirety of a file
+    // read in in one go, so that subsequent read calls (before a release)
+    // don't require re-reading the file 
+    void *handle1;
+    int handle2;
 };
 
 enum cbm_file_type
@@ -188,6 +196,44 @@ enum file_source
     SOURCE_DUMMY,
 };
 
+// Callbacks when FUSE requests operation on a cbm_file entry
+struct cbm_state;
+struct cbm_file;
+typedef int (*callback_open) (struct cbm_state *cbm,
+                              int handle,
+                              struct cbm_file *entry,
+                              const char *path,
+                              struct fuse_file_info *fi);
+typedef int (*callback_release) (struct cbm_state *cbm,
+                                 int handle,
+                                 struct cbm_file *entry,
+                                 const char *path,
+                                 struct fuse_file_info *fi);
+typedef int (*callback_read) (struct cbm_state *cbm,
+                              int handle,
+                              struct cbm_file *entry,
+                              const char *path,
+                              char *buf,
+                              size_t size,
+                              off_t offset,
+                              struct fuse_file_info *fi);
+typedef int (*callback_write) (struct cbm_state *cbm,
+                               int handle,
+                               struct cbm_file *entry,
+                               const char *path,
+                               const char *buf,
+                               size_t size,
+                               off_t offset,
+                               struct fuse_file_info *fi);
+struct callbacks
+{
+    int handle;
+    callback_open open;
+    callback_release release;
+    callback_read read;
+    callback_write write;
+};
+
 // Information about a file.  This might be a file which actually exists on
 // the disk, one which has been created by the kernel but not yet written to
 // the disk, or a dummy one we will expose in the FUSE FS, but doesn't
@@ -223,13 +269,9 @@ struct cbm_file
     // decide to expose a different value)
     off_t filesize;
 
-    // Pointer to the contents of this file (to read).  Only suitable for
-    // statically allocated strings - as the pointer will never (and should
-    // never) be freed up for these.
-    // This is only valid for type == CBM_DUMMY_FILE, and doesn't have to be
-    // present - but if it's not present, cbmfile helper functions will not
-    // automagically handle returning its content.
-    const char *static_read_contents;
+    // Callbacks.  If NULL that function (read/write) will not be supported
+    // for this file
+    struct callbacks cbs;
 };
 
 // Information about an entry from the disk directory.  May be either a header
@@ -408,9 +450,11 @@ extern int allocate_free_channel(CBM *cbm,
                                  const char *filename);
 extern void release_channel(CBM *cbm, int ch);
 
+// cbmdisk.c
+extern int process_format_request(CBM *cbm, const char *buf, size_t size);
+
 // cbmdummy.c
-extern const struct dummy_files dummy_files[];
-extern const char *dummy_dirs[];
+extern int create_dummy_entries(CBM *cbm);
 
 // cbmfile.c
 extern int read_dir_from_disk(CBM *cbm);
@@ -433,18 +477,19 @@ extern struct cbm_file *create_file_entry(CBM *cbm,
                                           const char *suffix,
                                           const int directory,
                                           const off_t size,
-                                          const char *static_read_contents,
+                                          struct callbacks *cbs,
                                           int *error);
 extern struct cbm_file *create_cbm_file_entry(CBM *cbm,
                                               const char *filename,
                                               const char *suffix,
                                               const off_t cbm_blocks,
+                                              struct callbacks *cbs,
                                               int *error);
 extern struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 const char *filename,
                                                 const int directory,
                                                 const off_t filesize,
-                                                const char *static_read_contents,
+                                                struct callbacks *cbs,
                                                 int *error);
 
 // cbmfuse.c

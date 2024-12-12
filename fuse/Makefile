@@ -10,6 +10,7 @@ LIBS = -lopencbm -lfuse3 -lpthread
 TARGET = 1541fs-fuse
 SRC = cbmargs.c     \
       cbmchannel.c  \
+	  cbmdisk.c     \
 	  cbmdummy.c    \
       cbmfile.c     \
       cbmfuse.c     \

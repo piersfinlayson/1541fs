@@ -370,7 +370,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     if (!cbm->dir_is_clean)
     {
         rc = read_dir_from_disk(cbm);
-        if (!rc)
+        if (rc)
         {
             WARN("Failed to load directory listing prior to opening file: %s", path);
             goto EXIT;
@@ -449,6 +449,7 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
 {
     int locked = 0;
     int rc = -1;
+    int rc2;
     int ch;
     struct cbm_channel *channel;
     const char *actual_path;
@@ -480,14 +481,23 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
     }
 
     rc = cbm_close(cbm->fd, cbm->device_num, (unsigned char)ch);
-    if (!rc)
+    if (rc)
     {
-        rc = check_drive_status(cbm);
-        (void)rc;
-        WARN("Hit error closing channel %d", ch);
+        rc2 = check_drive_status(cbm);
+        (void)rc2;
+        WARN("Hit error closing channel %d %d", ch, rc);
         WARN("Drive status: %s", cbm->error_buffer);
         rc = -1;
         goto EXIT;
+    }
+
+    // Clear the handles
+    if (channel->handle1 != NULL)
+    {
+        DEBUG("Freeing buffer stored in channel");
+        free(channel->handle1);
+        channel->handle1 = NULL;
+        channel->handle2 = 0;
     }
 
     release_channel(cbm, ch);
@@ -542,6 +552,7 @@ static int cbm_read(const char *path,
     char *temp_buf = NULL;
     const char *actual_path;
     char *dummy_contents;
+    off_t total_read;
 
     CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
@@ -618,7 +629,6 @@ static int cbm_read(const char *path,
         goto EXIT;
     }
 
-    // TO DO - actually read in the file
     rc = cbm_talk(cbm->fd, cbm->device_num, (unsigned char)ch);
     if (rc)
     {
@@ -629,36 +639,68 @@ static int cbm_read(const char *path,
         goto EXIT;
     }
 
-    // TO DO = store this off in the channel info, so we don't need to read
-    // again if the kernel asks us for more of the file.
+    if (channel->handle1 == NULL)
+    {
+        int read_block_size = CBM_BLOCK_SIZE;
+        DEBUG("Read in file in %d byte chunks", read_block_size);
 
-    // Allocate temporary buffer to read entire file into
-    len = entry->filesize;
-    temp_buf = malloc(len);
-    if (temp_buf == NULL)
-    {
-        WARN("Failed to malloc buffer to read in file: %s", actual_path);
-        goto EXIT;
-    }
-    rc = cbm_raw_read(cbm->fd, buf, len);
-    if (rc < 0)
-    {
-        rc2 = check_drive_status(cbm);
-        (void)rc2;
-        WARN("Hit error reading file %s channel %d", actual_path, ch);
-        WARN("Drive status: %d %s", rc, cbm->error_buffer);
-        cbm_untalk(cbm->fd);
-    }
-    else if ((unsigned int)rc < len)
-    {
-        WARN("Couldn't read the whole of file %s channel %d", actual_path, ch);
-        goto EXIT;
-    }
-    if ((unsigned int)offset < len)
-    {
-        if ((long unsigned int)offset + size > len)
+        // Allocate temporary buffer to read entire file into
+        len = entry->filesize;
+        temp_buf = malloc(len);
+        if (temp_buf == NULL)
         {
-            size = len - (long unsigned int)offset;
+            WARN("Failed to malloc buffer to read in file: %s", actual_path);
+            goto EXIT;
+        }
+
+        // Read the whole file
+        total_read = 0;
+        while (total_read < len)
+        {
+            off_t to_read = (len - total_read < read_block_size) ? len - total_read : read_block_size;
+            rc = cbm_raw_read(cbm->fd, buf + total_read, (size_t)to_read);
+            if (rc < 0)
+            {
+                rc2 = check_drive_status(cbm);
+                (void)rc2;
+                WARN("Hit error reading file %s channel %d", actual_path, ch);
+                WARN("Drive status: %d %s", rc, cbm->error_buffer);
+                cbm_untalk(cbm->fd);
+                goto EXIT;
+            }
+            else if (rc == 0)
+            {
+                WARN("Reached end of file for %s channel %d", actual_path, ch);
+                break;
+            }
+            else
+            {
+                total_read += rc;
+            }
+        }
+
+        // Remember, len is not the file system - it was our estimate of the 
+        // filesize, based on the number of blocks the file took on the disk.
+        // If the reading didn't hit an error then we can reasonably assume we
+        // read the whole file - so update the filesize stat 
+        if ((unsigned int)total_read < len) {
+            INFO("Actual size of file %s channel %d is %lu bytes vs %d", actual_path, ch, total_read, len);
+            entry->filesize = (unsigned int)total_read;
+        }
+    }
+    else
+    {
+        DEBUG("Already have this file read in - use it");
+        temp_buf = channel->handle1;
+        total_read = channel->handle2;
+    }
+
+
+    if ((unsigned int)offset < total_read)
+    {
+        if ((size_t)offset + size > (size_t)total_read)
+        {
+            size = (size_t)total_read - (size_t)offset;
         }
         memcpy(buf, temp_buf+offset, size);
     }
@@ -667,6 +709,12 @@ static int cbm_read(const char *path,
         size = 0;
     }
     rc = (int)size;
+
+    // Store this off in the channel info, so we don't need to read
+    // again if the kernel asks us for more of the file.
+    channel->handle1 = temp_buf;
+    temp_buf = NULL;
+    channel->handle2 = (int)total_read;
 
 EXIT:
 
@@ -695,7 +743,6 @@ static int cbm_write(const char *path,
     int rc2;
     int ch;
     struct cbm_channel *channel;
-    unsigned int len;
     struct cbm_dir_entry *entry;
     char *temp_buf = NULL;
     const char *actual_path;
@@ -714,118 +761,7 @@ static int cbm_write(const char *path,
         DEBUG("Request to write special file: %s", path);
         if (!strcmp(actual_path, PATH_FORMAT_DISK))
         {
-            DEBUG("Request to write " PATH_FORMAT_DISK " size: %lu offset %ld",
-                  size,
-                  offset);
-            
-            rc = -EIO;
-
-            // See if we have a valid disk name and id like this "diskname,id"
-            
-            // For length, 1 char longer is actually OK if ends with \r or \n
-            if (size > (MAX_HEADER_LEN))
-            {
-                DEBUG("Disk name, ID data too long");
-                goto EXIT;
-            }
-            if (size < 4)
-            {
-                DEBUG("Disk name, ID data too short");
-                goto EXIT;
-            }
-
-            // Buf may not be NULL terminated - turn into a string
-            // By memsetting to 0 and checking size above we can guarantee
-            // this is NULL terminated
-            char header[MAX_HEADER_LEN+1];
-            memset(header, 0, MAX_HEADER_LEN+1);
-            memcpy(header, buf, size);
-            int ii;
-            for (ii = (int)(size-1); ii >= 0; ii--)
-            {
-                if ((header[ii] == '\r') || (header[ii] == '\n'))
-                {
-                    header[ii] = 0;
-                }
-                else
-                {
-                    // Only go as far back as 1st none new line char
-                    break;
-                }
-            }
-
-            char *name;
-            name = strtok(header, ",");
-            if (name == NULL)
-            {
-                DEBUG("Disk name, ID data not properly formatted");
-                goto EXIT;
-            }
-            char *id;
-            id = strtok(NULL, ",");
-            if (id == NULL)
-            {
-                DEBUG("Disk name, ID data not properly formatted");
-                goto EXIT;
-            }
-            if (strtok(NULL, ",") != NULL)
-            {
-                DEBUG("Too much data");
-                goto EXIT;
-            }
-            if (strlen(name) > MAX_FILE_LEN)
-            {
-                DEBUG("Header name too long");
-                goto EXIT;
-            }
-            if (strlen(id) != ID_LEN)
-            {
-                DEBUG("ID not 2 chars long: %lu %s", strlen(id), id);
-                goto EXIT;
-            }
-            char cmd[MAX_HEADER_LEN+3];
-            name = cbm_ascii2petscii(name);
-            id = cbm_ascii2petscii(id);
-            sprintf(cmd, "N0:%s,%s", name, id);
-
-            if (!cbm->dummy_formats)
-            {
-                // It's all good - format the disk
-                // TO DO check 15 not open properly
-                assert(!cbm->channel[15].open);
-                DEBUG("Formatting disk with cmd: %s", cmd);
-                rc = cbm_open(cbm->fd, cbm->device_num, 15, NULL, 0);
-                if (rc)
-                {
-                    rc2 = check_drive_status(cbm);
-                    (void)rc2;
-                    WARN("Failed to open command channel: %d %s", rc, cbm->error_buffer);
-                    goto EXIT;
-                }
-                cbm_listen(cbm->fd, cbm->device_num, 15);
-                rc = cbm_raw_write(cbm->fd, cmd, strlen(cmd));
-                cbm_unlisten(cbm->fd);
-
-                if (rc != (int)strlen(cmd))
-                {
-                    rc2 = check_drive_status(cbm);
-                    (void)rc2;
-                    DEBUG("Failed to write entire command: %d %s", len, cbm->error_buffer);
-                    rc = -EIO;
-                    goto EXIT;
-                }
-            }
-            else
-            {
-                DEBUG("Pretending to format disk with cmd: %s", cmd);
-            }
-
-            // Force directory reread
-            cbm->dir_is_clean = 0;
-            cbm_create_read_dir_thread(cbm);
-
-            DEBUG("Format successful");
-            rc = (int)size;
+            rc = process_format_request(cbm, buf, size);
         }
         else if (!strcmp(actual_path, PATH_FORCE_DISK_REREAD))
         {
