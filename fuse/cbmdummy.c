@@ -101,6 +101,14 @@ static int handle_dummy_open(CBM *cbm,
     ENTRY();
 
     rc = check_dummy_valid(handle);
+    if (!rc)
+    {
+        goto EXIT;
+    }
+
+    fi->fh = DUMMY_CHANNEL;
+
+EXIT:
 
     EXIT();
 
@@ -122,6 +130,15 @@ static int handle_dummy_release(CBM *cbm,
     ENTRY();
 
     rc = check_dummy_valid(handle);
+    if (!rc)
+    {
+        goto EXIT;
+    }
+
+    // Don't know if we should reset this or not - but we will anyway
+    fi->fh = 0;
+
+EXIT:
 
     EXIT();
 
@@ -147,6 +164,16 @@ static int handle_dummy_read(CBM *cbm,
     ENTRY();
 
     rc = check_dummy_valid(handle);
+    if (!rc)
+    {
+        goto EXIT;
+    }
+
+    if (fi->fh != DUMMY_CHANNEL)
+    {
+        rc = -EBADF;
+        goto EXIT;
+    }
 
     dentry = &(dummies[handle-1]);
 
@@ -199,6 +226,16 @@ static int handle_dummy_write(CBM *cbm,
     ENTRY();
 
     rc = check_dummy_valid(handle);
+    if (!rc)
+    {
+        goto EXIT;
+    }
+
+    if (fi->fh != DUMMY_CHANNEL)
+    {
+        rc = -EBADF;
+        goto EXIT;
+    }
 
     dentry = &(dummies[handle-1]);
 
@@ -275,7 +312,7 @@ int create_dummy_entries(CBM *cbm)
     // Set the callbacks 
     memset(&dir_cbs, 0, sizeof(dir_cbs));
 
-    for (entry = dummies; entry != NULL; entry++)
+    for (entry = dummies; entry->handle != 0; entry++)
     {
         struct callbacks *cbs;
         if (entry->dir)

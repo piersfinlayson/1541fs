@@ -3,13 +3,16 @@
 // Allocate a free CBM channel, based on the required usage and free channels
 int allocate_free_channel(CBM *cbm,
                           enum cbm_channel_usage usage,
-                          const char *filename)
+                          struct cbm_file *entry)
 {
     int min, max;
     int ch = -1;
 
+    ENTRY();
+
     assert(cbm != NULL);
     assert(usage != USAGE_NONE);
+    assert(entry != NULL);
 
     // Figure out valid channels based on usage
     switch (usage)
@@ -54,8 +57,9 @@ int allocate_free_channel(CBM *cbm,
             assert(cbm->channel[ch].num == ch);
             cbm->channel[ch].open = 1;
             cbm->channel[ch].usage = usage;
-            assert(strnlen(filename, MAX_FILENAME_LEN) < MAX_FILENAME_LEN);
-            strcpy(cbm->channel[ch].filename, filename);
+            cbm->channel[ch].file = entry;
+            assert(entry->channel != NULL);
+            entry->channel = &(cbm->channel[ch]);
             break;
         }
     }
@@ -67,6 +71,8 @@ int allocate_free_channel(CBM *cbm,
     }
 
 EXIT:
+
+    EXIT();
 
     return ch;
 }
@@ -80,13 +86,21 @@ void release_channel(CBM *cbm, int ch)
 
     assert(cbm->channel[ch].num == ch);
     assert(cbm->channel[ch].open);
+    assert(cbm->channel[ch].file != NULL);
+    assert(cbm->channel[ch].file->channel == &(cbm->channel[ch]));
+
+    // Clear up the file entry
+    cbm->channel[ch].file->channel = NULL;
+    cbm->channel[ch].file = NULL;
     
     // Check that any handles were cleared (because caller should have)
     // freed any allocated memory stored in them, etc
     assert(cbm->channel[ch].handle1 == NULL);
     assert(cbm->channel[ch].handle2 == 0);
 
-    memset(cbm->channel+ch, 0, sizeof(struct cbm_channel));
+    // Now memset this to 0 (yes, we explicitly set a bunch of stuff above
+    // to zero but that was belt and braces, and this clears the rest)
+    memset(&(cbm->channel[ch]), 0, sizeof(struct cbm_channel));
     cbm->channel[ch].num = (unsigned char)ch;
 
     assert(cbm->channel[ch].num == ch);

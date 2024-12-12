@@ -26,22 +26,27 @@
 
 extern int current_log_level;
 
+#ifdef DEBUG_BUILD
+#define PAD "        "
+#else // DEBUG_BUILD
+#define PAD ""
+#endif // DEBUG_BUILD 
 #define ERROR(format, ...) \
-    if (current_log_level >= LOG_ERR) syslog(LOG_ERR, format, ##__VA_ARGS__)
+    if (current_log_level >= LOG_ERR) syslog(LOG_ERR, PAD format, ##__VA_ARGS__)
 #define WARN(format, ...) \
-    if (current_log_level >= LOG_WARNING) syslog(LOG_WARNING, format, ##__VA_ARGS__)
+    if (current_log_level >= LOG_WARNING) syslog(LOG_WARNING, PAD format, ##__VA_ARGS__)
 #define INFO(format, ...) \
-    if (current_log_level >= LOG_INFO) syslog(LOG_INFO, format, ##__VA_ARGS__)
+    if (current_log_level >= LOG_INFO) syslog(LOG_INFO, PAD format, ##__VA_ARGS__)
 #ifdef DEBUG_BUILD
 #define DEBUG(format, ...) \
-    if (current_log_level >= LOG_DEBUG) syslog(LOG_DEBUG, format, ##__VA_ARGS__)
+    if (current_log_level >= LOG_DEBUG) syslog(LOG_DEBUG, PAD format, ##__VA_ARGS__)
 #define ENTRY(...) \
     if (current_log_level >= LOG_DEBUG) \
-        syslog(LOG_DEBUG, "ENTRY: %s()", __func__, ##__VA_ARGS__);
+        syslog(LOG_DEBUG, "ENTRY:  %s() %s, %d", __func__, __FILE__, __LINE__ ##__VA_ARGS__);
 #define EXIT(...) \
     if (current_log_level >= LOG_DEBUG) \
-        syslog(LOG_DEBUG, "EXIT:  %s()", __func__, ##__VA_ARGS__);
-#define PARAMS DEBUG
+        syslog(LOG_DEBUG, "EXIT:   %s() %s, %d", __func__, __FILE__, __LINE__,  ##__VA_ARGS__);
+#define PARAMS(format, ...) DEBUG("PARAMS: %s() " format, __func__, ##__VA_ARGS__);
 #else // DEBUG_BUILD
 #define DEBUG(format, ...)
 #define ENTRY(...)
@@ -70,7 +75,7 @@ extern int current_log_level;
 // When allocating buffers for reading data, etc, allocate this much memory
 // to being with, and if it's not enough use this as an increment to use to
 // realloc.
-#define BUF_INC 1024
+#define BUF_INC 4096
 
 // Commodore disk drive device numbers.
 // Note that these are _device_ numbers, not _drive_ numbers.  Some Commodore
@@ -87,38 +92,34 @@ extern int current_log_level;
 // 15 - control channel (send commands, or receive status)
 //2-14 inclusive can be used for other purposes.
 #define NUM_CHANNELS      16
+#define WRITE_CHANNEL     0
+#define READ_CHANNEL      1
 #define MIN_USER_CHANNEL  2
 #define MAX_USER_CHANNEL  14
 #define DUMMY_CHANNEL     16  // Used to access dummy files/directories
+#define MIN_CHANNEL       0
+#define MAX_CHANNEL       DUMMY_CHANNEL
 
 // Other information about Commodore disk file sytem and d
 #define CBM_BLOCK_SIZE 256
 #define MAX_CBM_FILENAME_STR_LEN 16+1 // 16 chars, plus 1 for NULL terminator
 #define MAX_FUSE_FILENAME_STR_LEN MAX_CBM_FILENAME_STR_LEN+1+3 // 1 for period, 3 for suffix
 #define CBM_ID_STR_LEN       2+1      // 2 chars, plus 1 for NULL terminator
-#define CBM_FILE_TYPE_STR_LEN 3+1  // 3 chars, 1 terminator
+#define CBM_FILE_TYPE_LEN 3
+#define CBM_FILE_TYPE_STR_LEN CBM_FILE_TYPE_LEN+1  // 3 chars, 1 terminator
 #define MAX_FILENAME_LEN 16+1+3+1 // 16 chars + 1 for period + 3 for file ending + 1 null terminator
 #define MAX_HEADER_LEN   16+1+2+1 // 16 chars + 1 for comma + 2 for ID + 1 null terminator
 #define MAX_FILE_LEN     16
 #define ID_LEN           2
 #define DUMMY_FILE_SUFFIX_LEN 3+1
 
-#define DELIM_FILE  "."
-#define DELIM_HDR   ","
+#define DELIM_FILE  '.'
+#define DELIM_HDR   ','
 
 #define DUMMY_FILE_SUFFIX "cmd"
 
 // We allocate the files array in cbm_state in blocks of tihs quantity
 #define CBM_FILE_REALLOCATE_QUANTITY  10
-
-// Special paths - declared in cmbfile.c
-extern const char *special_dirs[];
-
-// DELETE
-// Special files - declared in cbmfiles.c
-#define PATH_FORCE_DISK_REREAD  "disk_reread.cmd" // Could use header for this
-#define PATH_FORMAT_DISK        "format_disk.cmd"       // Could also use header for this
-extern const char *special_files[];
 
 // Valid uses for disk drive channels 
 enum cbm_channel_usage
@@ -153,8 +154,8 @@ struct cbm_channel
     enum cbm_channel_usage usage;
 
     // If usage is USAGE_OPEN (channels 2-14) and open is 1, stores the file
-    // of the filename opened
-    char filename[MAX_FILENAME_LEN];
+    // entry
+    struct cbm_file *file;
 
     // Opaque handles stored on behalf of code handling open/release/read/write
     // operations.  May be used, for example, to store the entirety of a file
@@ -202,8 +203,9 @@ enum cbm_file_type
 // Used by create_file_entry() in cbmfile.c
 enum file_source
 {
-    SOURCE_CBM,
-    SOURCE_DUMMY,
+    SOURCE_CBM,   // A file which exists on the physical media
+    SOURCE_DUMMY, // 1541fs dummy file (not to be created on media)
+    SOURCE_FUSE,  // FUSE created file (to be created on media)
 };
 
 // Callbacks when FUSE requests operation on a cbm_file entry
@@ -256,14 +258,14 @@ struct cbm_file
     // The filename on the Commodore disk
     // A zero length string for types CBM_DUMMY_DIR and CBM_DUMMY_FILE
     // Stored as PETSCII
-    char *cbm_filename[MAX_CBM_FILENAME_STR_LEN];
+    char cbm_filename[MAX_CBM_FILENAME_STR_LEN];
 
     // The ID of the disk header.  Only valid where type is CBM_DISK_HDR
-    char *cbm_header_id[CBM_ID_STR_LEN];
+    char cbm_header_id[CBM_ID_STR_LEN];
 
     // The name of this file on the FUSE FS
     // Stored as ASCII 
-    char *fuse_filename[MAX_FUSE_FILENAME_STR_LEN];
+    char fuse_filename[MAX_FUSE_FILENAME_STR_LEN];
 
     // Linux file properties (size, timestamps, permissions, etc) 
     struct stat st;
@@ -278,6 +280,15 @@ struct cbm_file
     // We set to 0 for CBM_DUMMY_DIR and CBM_DUMMY_FILE types (unless we
     // decide to expose a different value)
     off_t filesize;
+
+    // For CBM_PRG, CBM, USR, CBM_REL, CBM_SEQ indicates whether the file is
+    // not yet actually written to the disk - happens after an open but before
+    // a write
+    int not_yet_on_disk;
+
+    // Pointer to channel for this file.
+    // Only non-NULL if file is open
+    struct cbm_channel *channel;
 
     // Callbacks.  If NULL that function (read/write) will not be supported
     // for this file
@@ -386,28 +397,6 @@ typedef struct cbm_state
     // don't think anything else has changed.
     int dir_is_clean;
 
-    // Number of valid entries in dir_entries - so number of files in the
-    // directory.  This includes any "special" files, like the disk header
-    // which we represent as a file, but not . or .., which are faked by
-    // the _readdir() function, and not stored in dir_entries.  Note there
-    // may be more memory pointed to by dir_entries than num_dir_entries
-    // suggests.  That's OK as if/when we free the OS will take care of
-    // freeing it all.  However we may unnecessary realloc dir_entries if
-    // we subsequently need more (and there was more hiding there than we
-    // expected).  If you want to understand why this is the case read the
-    // code in read_dir_from_disk - but it's essentially because:
-    // * we estimate how many entries there will be before we know and
-    //   allocate memory based on that (which may be an over-estimate)
-    // * and if we subsequently do a directory read and there are fewer files
-    //   we will avoid a reallocation at that point - but num_dir_entries will
-    //   always represent the valid number of dir_entries, not the amount of
-    //   space for them (but there will always be enough space for the number
-    //   specified, or we will re-alloc.
-    int num_dir_entries;
-
-    // Actual directory entires, including special files, excepting . and ..
-    struct cbm_dir_entry *dir_entries;
-
     // Array containing information about all potentially used channels.
     // Users only need store information about the channels in use if they
     // will remain unused beyond a mutex lock.  If only used within a mutex 
@@ -457,30 +446,28 @@ extern void destroy_args(CBM *cbm);
 // cbmchannel.c
 extern int allocate_free_channel(CBM *cbm,
                                  enum cbm_channel_usage usage,
-                                 const char *filename);
+                                 struct cbm_file *entry);
 extern void release_channel(CBM *cbm, int ch);
 
 // cbmdisk.c
 extern int process_format_request(CBM *cbm, const char *buf, size_t size);
+extern struct callbacks disk_cbs;
 
 // cbmdummy.c
 extern int create_dummy_entries(CBM *cbm);
 
 // cbmfile.c
 extern int read_dir_from_disk(CBM *cbm);
-extern int is_special_dir(const char *path);
-extern int is_special_file(const char *path);
-extern void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf);
 extern void destroy_files(CBM *cbm);
 extern struct cbm_file *return_next_free_file_entry(CBM *cbm);
 extern void free_file_entry(CBM *cbm, struct cbm_file *file);
 extern struct cbm_file *find_file_entry(CBM *cbm,
-                                        char *cbm_filename,
-                                        char *fuse_filename);
+                                        const char *cbm_filename,
+                                        const char *fuse_filename);
 extern struct cbm_file *find_cbm_file_entry(CBM *cbm,
-                                            char *filename);
-extern struct cbm_file *find_dummy_file_entry(CBM *cbm,
-                                            char *filename);
+                                            const char *filename);
+extern struct cbm_file *find_fuse_file_entry(CBM *cbm,
+                                             const char *filename);
 extern struct cbm_file *create_file_entry(CBM *cbm,
                                           const enum file_source source,
                                           const char *filename,
@@ -495,12 +482,18 @@ extern struct cbm_file *create_cbm_file_entry(CBM *cbm,
                                               const off_t cbm_blocks,
                                               struct callbacks *cbs,
                                               int *error);
+extern struct cbm_file *create_fuse_file_entry(CBM *cbm,
+                                               const char *filename,
+                                               const off_t filesize,
+                                               struct callbacks *cbs,
+                                               int *error);
 extern struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 const char *filename,
                                                 const int directory,
                                                 const off_t filesize,
                                                 struct callbacks *cbs,
                                                 int *error);
+extern int is_dummy_file(struct cbm_file *entry);
 
 // cbmfuse.c
 extern void cbm_destroy(void *private_data);

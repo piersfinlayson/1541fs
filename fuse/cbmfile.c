@@ -2,24 +2,6 @@
 
 // Contains code for dealing with cbm_file entries
 
-// KEEP - rename?
-// Special paths
-// Must not begin or terminate the / or FUSE will barf
-const char *special_dirs[] =
-{
-    ".",
-    "..",
-    NULL
-};
-
-// KEEP - rename?
-const char *special_files[] = {
-    PATH_FORCE_DISK_REREAD,
-    PATH_FORMAT_DISK,
-    NULL,
-};
-
-// KEEP
 // Removes any trailing spaces from the end of a string
 // Returns the new string length
 static int remove_trailing_spaces(char *str) {
@@ -41,99 +23,66 @@ static int remove_trailing_spaces(char *str) {
     return (ii + 1);
 }
 
-// DELETE
-// Reallocates a line_count number of directory entries, retaining the
-// existing entries
-static void realloc_dir_entries(CBM *cbm, int line_count)
-{
-    if (line_count > cbm->num_dir_entries)
-    {
-        // We can't reuse - better free and malloc a new one
-        if (cbm->dir_entries != NULL)
-        {
-            free(cbm->dir_entries);
-            cbm->dir_entries = NULL;
-        }
-        cbm->dir_entries = malloc((size_t)line_count * sizeof(struct cbm_dir_entry));
-        if (cbm->dir_entries != NULL)
-        {
-            cbm->num_dir_entries = line_count;
-        }
-        else
-        {
-            cbm->num_dir_entries = 0;
-            goto EXIT;
-        }
-    }
-    memset(cbm->dir_entries, 0, (size_t)line_count * sizeof(struct cbm_dir_entry));
-
-EXIT:
-
-    return;
-}
-
-// KEEP
-// Reallocates a buffer if we've run out of space
-static void check_realloc_buffer(char **buffer,
-                          unsigned int *buf_len,
-                          const unsigned int pos)
+// Allocate/realloc buffer
+// Can be passed a zero length buffer and zero buflen 
+static void *realloc_buffer(char *buffer,
+                            const size_t buflen,
+                            size_t *newlen)
 {
     char *new_buffer;
 
-    assert(buffer != NULL);
-    if (pos >= *buf_len)
-    {
-        *buf_len += BUF_INC;
-        new_buffer = realloc(*buffer, *buf_len);
+    assert(newlen != NULL);
 
-        // The following handles the case if the remalloc failed -
-        // the original buffer will still be freed, and buffer set to NULL
-        if (new_buffer == NULL)
-        {
-            // Realloc frees buffer if it moves it
-            free(*buffer);
-        }
-        *buffer = new_buffer;
+    *newlen = buflen + BUF_INC;
+    new_buffer = realloc(buffer, *newlen);
+    if (new_buffer == NULL)
+    {
+        WARN("Failed to realloc buffer was %zu attemped %zu", buflen, *newlen);
+        *newlen = 0;
     }
+
+    return new_buffer;
 }
 
-// REWORK (what a nightmare!)
-// Reads in the directory from a CBM disk
-int read_dir_from_disk(CBM *cbm)
+// Load the directory listing from disk - might be able to use the regular
+// read function for this
+static int load_dir_listing(CBM *cbm, char **buf, size_t *data_len)
 {
-    unsigned int buf_len;
-    unsigned int data_len;
-    unsigned int pos;
-    char *buffer = NULL;
-    int rc = 0;
-    int error;
+    int rc = 1;
+    int rc2;
+    char *buffer;
+    size_t buf_len;
+    size_t pos;
     char c;
-    int line_count;
-    struct cbm_dir_entry *dir_entry = NULL;
+    int drive_open = 0;
 
-    cbm->dir_is_clean = 0;
+    ENTRY();
+
+    *buf = NULL;
 
     // malloc a buffer to store data read from the disk in
     DEBUG("Allocate buffer to read in data");
-    buf_len = BUF_INC;
-    buffer = malloc(buf_len);
+    buffer = realloc_buffer(NULL, 0, &buf_len);
     if (buffer == NULL)
     {
         DEBUG("Failed to allocate memory for buffer to read dir into");
         rc = -ENOMEM;
         goto EXIT;
     }
+    assert(buf_len > 0);
 
     // open the directory "file" ($)
     DEBUG("Open $");
     c = cbm_ascii2petscii_c('$');
-    error = cbm_open(cbm->fd, cbm->device_num, 0, &c, 1);
-    if (error)
+    rc = cbm_open(cbm->fd, cbm->device_num, 0, &c, READ_CHANNEL);
+    if (rc)
     {
-        DEBUG("Open of $ failed");
-        rc = -EIO;
+        rc2 = check_drive_status(cbm);
+        DEBUG("Open of $ failed %d", rc);
+        DEBUG("Drive status %d %s", rc2, cbm->error_buffer);
         goto EXIT;
     }
+    drive_open = 1;
     cbm_talk(cbm->fd, cbm->device_num, 0);
 
     // Read in directory listing from the drive
@@ -144,49 +93,58 @@ int read_dir_from_disk(CBM *cbm)
         pos++;
         if (pos >= buf_len)
         {
-            check_realloc_buffer(&buffer, &buf_len, pos);
-
+            buffer = realloc_buffer(buffer, buf_len, &buf_len);
+            if (buffer == NULL)
+            {
+                DEBUG("Out of memory while reading directory");
+                rc = -ENOMEM;
+                goto EXIT;
+            }
         }
-        if (buffer == NULL)
-        {
-            DEBUG("Out of memory while reading directory");
-            rc = -ENOMEM;
-            goto EXIT;
-        }
     }
-    data_len = pos;
-    DEBUG("Read %d bytes total directory listing", data_len);
+    *data_len = pos;
+    DEBUG("Read %zu bytes total directory listing", *data_len);
 
-    cbm_untalk(cbm->fd);
-    if (check_drive_status(cbm))
+    rc = cbm_untalk(cbm->fd);
+    if (rc)
     {
-        DEBUG("Hit error reading from disk");
-        goto EXIT;
-    }
-    cbm_close(cbm->fd, cbm->device_num, 0);
-
-    // Estimate how many lines there are - we'll estimate 28 bytes to a line
-#define APPROX_BYTES_IN_DIR_LINE 28
-    DEBUG("Calculate appox number of lines in directory listing");
-    int approx_line_count = (int)(data_len / APPROX_BYTES_IN_DIR_LINE + (data_len % APPROX_BYTES_IN_DIR_LINE ? 1 : 0));
-    DEBUG("Approximate number of lines in directory listing: %d", approx_line_count);
-    if (approx_line_count <= 0)
-    {
-        DEBUG("0 lines in directory listing");
+        rc2 = check_drive_status(cbm);
+        DEBUG("Hit error reading $ from disk %d", rc);
+        DEBUG("Drive status %d %s", rc2, cbm->error_buffer);
         goto EXIT;
     }
 
-    DEBUG("Realloc directory entries");
-    realloc_dir_entries(cbm, approx_line_count);
-    if (cbm->dir_entries == NULL)
+    *buf = buffer;
+
+EXIT:
+
+    if (drive_open)
     {
-        DEBUG("Failed to allocate memory for directory entries");
-        rc = -ENOMEM;
-        goto EXIT;
+        cbm_close(cbm->fd, cbm->device_num, 0);
     }
 
-    // Note our number of directory entries may be wrong - we'll figure this out
-    // later
+    if (rc)
+    {
+        free(buffer);
+        *buf = NULL;
+        *data_len = 0;
+    }
+
+    EXIT();
+
+    return rc;
+}
+
+static int process_dir_listing(CBM *cbm, char *buffer, size_t data_len)
+{
+    int rc = 1;
+    size_t pos;
+    int line_count;
+
+    ENTRY();
+
+    assert(cbm != NULL);
+    assert(buffer != NULL);
 
     // Check 1st 3 bytes
     DEBUG("Check 1st 4 bytes of listing");
@@ -196,10 +154,8 @@ int read_dir_from_disk(CBM *cbm)
         DEBUG("Fewer than 4 bytes in whole dir listing");
         goto EXIT;
     }
-    if ((buffer[0] != 0x1) ||
-        (buffer[1] != 0x4) ||
-        (buffer[2] != 0x1) ||
-        buffer[3] != 0x1)
+    unsigned char first_4_bytes[4] = {0x1, 0x4, 0x1, 0x01};
+    if (memcmp(buffer, first_4_bytes, 4))
     {
         DEBUG("Unexpected first 4 bytes: 0x%x 0x%x 0x%x 0x%x",
               buffer[0],
@@ -212,58 +168,48 @@ int read_dir_from_disk(CBM *cbm)
 
     // Now read lines
     DEBUG("Read lines of listing");
-    dir_entry = cbm->dir_entries;
-    assert(dir_entry != NULL);
     line_count = 0;
     while (pos < data_len)
     {
+        struct cbm_file *entry;
+        off_t cbm_blocks;
         DEBUG("Reading line of listing");
 
-        // Check if have run out of dir_entries
-        if (cbm->num_dir_entries < (line_count+1))
-        {
-            INFO("Estimated number of lines in directory incorrectly");
-            realloc_dir_entries(cbm, line_count+1);
-            if (cbm->dir_entries == NULL)
-            {
-                DEBUG("Failed to reallocate memory for directory entries");
-                rc = -ENOMEM;
-                goto EXIT;
-            }
-        }
-        
         DEBUG("Get blocks for this file");
         // Get the number of blocks for this file
-        if (pos >= (buf_len + 2))
+        if (pos >= (data_len + 2))
         {
             DEBUG("Ran out of data too soon");
             goto EXIT;
         }
         DEBUG("Next 2 bytes for block size: 0x%x 0x%x", (unsigned char)buffer[pos], (unsigned char)buffer[pos+1]);
-        dir_entry->num_blocks = (unsigned char)buffer[pos++];
+        cbm_blocks = (unsigned char)buffer[pos++];
         // If the 2nd byte is 0x12 that means reverse text - so header
         // Assume any value below this is high order byte, any value
         // above this isn't.
         if (buffer[pos] < 0x12)
         {
-            dir_entry->num_blocks |= (unsigned short)(buffer[pos++] << 8);
+            cbm_blocks |= (unsigned short)(buffer[pos++] << 8);
         }
-        dir_entry->filesize = dir_entry->num_blocks * CBM_BLOCK_SIZE;
-        DEBUG("Num blocks: %d, Filesize: %d", dir_entry->num_blocks, dir_entry->filesize);
+        DEBUG("Num blocks: %zu", cbm_blocks);
 
+        // Now read the rest of the line
+        DEBUG("Read rest of line data");
+        char filename[MAX_CBM_FILENAME_STR_LEN];
+        char suffix[CBM_FILE_TYPE_STR_LEN];
         int filename_started = 0;
         int filename_ended = 0;
         int filename_len = 0;
         int is_header = 0;
         int is_footer = 0;
         int suffix_ended = 0;
-        char suffix[4] = {0, 0, 0, 0};
         int suffix_len = 0;
-
-        DEBUG("Read rest of line data");
+        memset(filename, 0, sizeof(filename));
+        memset(suffix, 0, sizeof(suffix));
         while ((pos < data_len) && 
                (buffer[pos] != 0x1))
         {
+            char c;
             c = buffer[pos];
             DEBUG("Got byte: 0x%x", c);
             if (is_footer)
@@ -287,7 +233,7 @@ int read_dir_from_disk(CBM *cbm)
                 {
                     DEBUG("Found header");
                     is_header = 1;
-                    dir_entry->is_header = 1;
+                    
                 }
                 else if (c == '"')
                 {
@@ -307,6 +253,7 @@ int read_dir_from_disk(CBM *cbm)
                 if (c == '"')
                 {
                     DEBUG("Filename ended");
+                    filename[filename_len] = 0;
                     filename_ended = 1;
                 }
                 else
@@ -318,12 +265,12 @@ int read_dir_from_disk(CBM *cbm)
                     // We sade 5 chars for the 4 digit suffix and 1xNULL terminator
                     if (filename_len < (MAX_FILENAME_LEN - 5))
                     {
-                        dir_entry->filename[filename_len] = cbm_petscii2ascii_c(c);
-                        filename_len++;
+                        filename[filename_len++] = c;
                     }
                     else
                     {
-                        WARN("Filename is longer than max len - truncated version is: %s", dir_entry->filename);
+                        WARN("Filename is longer than max len - truncated version is: %s",
+                             filename);
                     }
                 }
             }
@@ -335,17 +282,12 @@ int read_dir_from_disk(CBM *cbm)
                     // Suffix has ended - we could match with valid ones, but
                     // we won't bother - instead we'll just add to the
                     // filename
-                    filename_len = remove_trailing_spaces(dir_entry->filename);
-                    assert(filename_len < (MAX_FILENAME_LEN - 5));
-                    dir_entry->filename[filename_len] = dir_entry->is_header ? ',' : '.';
-                    dir_entry->filename[filename_len+1] = 0;
-                    strncat(dir_entry->filename, suffix, 4);
-                    suffix_ended = 1;
+                    suffix[suffix_len] = 0;
                 }
                 else if (suffix_len < 3)
                 {
                     DEBUG("Add char to suffix: %c", c);
-                    suffix[suffix_len++] = cbm_petscii2ascii_c(c);
+                    suffix[suffix_len++] = c;
                 }
                 else
                 {
@@ -377,20 +319,35 @@ int read_dir_from_disk(CBM *cbm)
         }
 
 
+        // Don't add the footer
         if (!is_footer)
         {
-            DEBUG("Added directory entry #%d: header %d name %s size %d cbm blocks %d",
+            // Now we have the info, create the file entry
+            entry = create_cbm_file_entry(cbm,
+                                          filename,
+                                          suffix,
+                                          cbm_blocks,
+                                          &disk_cbs,
+                                          &rc);
+            if (entry == NULL)
+            {
+                WARN("Couldn't create a file entry for %s %s %d", filename, suffix, rc);
+                assert(rc != 0);
+                goto EXIT;
+            }
+
+            DEBUG("Added disk file entry #%d: type %d fuse filename %s size %zu cbm blocks %zu",
                 line_count,
-                dir_entry->is_header,
-                dir_entry->filename,
-                dir_entry->filesize,
-                dir_entry->num_blocks);
-            dir_entry++;
+                entry->type,
+                entry->fuse_filename,
+                entry->filesize,
+                entry->cbm_blocks);
+
             line_count++;
         }
 
         // Don't add the footer
-        if (pos >= (buf_len + 2))
+        if (pos >= (data_len + 2))
         {
             DEBUG("Not enough data to read another line - exiting line parsing");
         }
@@ -399,112 +356,72 @@ int read_dir_from_disk(CBM *cbm)
         pos += 2;
     }
 
-    assert(line_count <= cbm->num_dir_entries);
-    cbm->num_dir_entries = line_count;
+    rc = 0;
+
+EXIT:
+
+    if (!rc)
+    {
+        DEBUG("Number of directory entries read: %d", line_count);
+    }
+
+    EXIT();
+
+    return rc;
+}
+
+int read_dir_from_disk(CBM *cbm)
+{
+    int rc = -1;
+    char *buf;
+    size_t data_len;
+
+    ENTRY();
+
+    assert(cbm != NULL);
+
+    cbm->dir_is_clean = 0;
+
+    rc = load_dir_listing(cbm, &buf, &data_len);
+    if (rc < 0)
+    {
+        goto EXIT;
+    }
+
+    rc = process_dir_listing(cbm, buf, data_len);
+    free(buf);
+    if (rc)
+    {
+        goto EXIT;
+    }
+
     cbm->dir_is_clean = 1;
     rc = 0;
 
 EXIT:
 
-    DEBUG("Exiting read directory function");
-    if (!rc)
-    {
-        DEBUG("Number of directory entries: %d is_clean: %d", cbm->num_dir_entries, cbm->dir_is_clean);
-    }
-
-    if (buffer != NULL)
-    {
-        free(buffer);
-    }
-
-    return rc;
-
-}
-
-// DELETE
-// Generic function which decides in this is a special file or special
-// directory
-static int is_special(const char *path, const char **strings)
-{
-    int ii;
-    const char *match;
-    int rc = 0;
-    if (!strcmp(path, "/"))
-    {
-        rc = 1;
-        goto EXIT;
-    }
-    for (ii = 0, match=strings[ii];
-         match != NULL;
-         ii++, match=strings[ii])
-    {
-        if (!strcmp(path+1, match))
-        {
-            rc = 1;
-            goto EXIT;
-        }
-    }
-
-EXIT:
+    EXIT();
 
     return rc;
 }
-
-// DELETE
-int is_special_dir(const char *path)
-{
-    return is_special(path, special_dirs);
-}
-
-// DELETE
-int is_special_file(const char *path)
-{
-    return is_special(path, special_files);
-}
-
-// DELETE
-// Sets up stat information about the file in order to provide it to FUSE
-void set_stat(struct cbm_dir_entry *entry, struct stat *stbuf)
-{
-    memset(stbuf, 0, sizeof(*stbuf));
-
-    // Num blocks is tricky.  It's supposed to represent the number of
-    // 512 byte blocks.  But our filesystem has size 256 blocks.  So we
-    // must convert into 512 byte blocks
-    assert(CBM_BLOCK_SIZE == 256);
-    stbuf->st_blocks = (int)((entry->filesize + 255) / 256 / 2);
-    stbuf->st_blksize = CBM_BLOCK_SIZE;
-    stbuf->st_size = (int)(entry->filesize);
-    if (!entry->is_dir)
-    {
-        stbuf->st_mode |= S_IFREG | 0444;
-        stbuf->st_nlink = 1;
-    }
-    else
-    {
-        stbuf->st_mode |= S_IFDIR | 0555;
-        stbuf->st_nlink = 2;
-    }
-    if (!entry->is_special)
-    {
-        stbuf->st_atime = stbuf->st_ctime = stbuf->st_mtime = time(NULL);
-    }
-}
-
-// Above here needs to be significantly reworked
 
 // Frees up any memory associated with file entrys in cbm_state.
 void destroy_files(CBM *cbm)
 {
     ENTRY();
 
-    if (cbm->dir_entries != NULL)
-    {
-        free(cbm->dir_entries);
-        cbm->dir_entries = NULL;
-    }
     if (cbm->files != NULL)
     {
+        for (int ii = 0; ii < NUM_CHANNELS; ii++)
+        {
+            if (cbm->channel[ii].handle1 != NULL)
+            {
+                DEBUG("Freeing buffer from channel %d", ii);
+                free(cbm->channel[ii].handle1);
+                cbm->channel[ii].handle1 = NULL;
+                cbm->channel[ii].handle2 = 0;
+            }
+        }
         free(cbm->files);
         cbm->files = NULL;
     }
@@ -512,12 +429,116 @@ void destroy_files(CBM *cbm)
     EXIT();
 }
 
+// Returns the file type given the suffix.  Would be better as implemented
+// as an array of mapping structs, but this was quicker.
+static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
+{
+    enum cbm_file_type type = CBM_NONE;
+
+    ENTRY();
+
+    if (strlen(suffix) == ID_LEN)
+    {
+        // We have a header
+        type = CBM_DISK_HDR;
+    }
+    else
+    {
+        if (strncmp(SUFFIX_PRG, suffix, CBM_FILE_TYPE_STR_LEN-1))
+        {
+            type = CBM_PRG;
+        }
+        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
+        {
+            type = CBM_SEQ;
+        }
+        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
+        {
+            type = CBM_USR;
+        }
+        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
+        {
+            type = CBM_REL;
+        }
+    }
+
+    EXIT();
+
+    return type;
+}
+
+// Fills in the cbm_filename given a fuse_filename in a cbm_file struct
+// Handles figuring out if the file suffix is valid, etc
+// Returns 0 on success. 
+static int update_cbm_filename_from_fuse(struct cbm_file *entry)
+{
+    int rc = -1;
+    char cbm_filename[MAX_CBM_FILENAME_STR_LEN];
+    char cbm_suffix[CBM_FILE_TYPE_STR_LEN];
+    char *filename;
+    size_t filename_len;
+    size_t suffix_len;
+    int ii; 
+
+    ENTRY();
+
+    assert(entry != NULL);
+    filename = entry->fuse_filename;
+    filename_len = strlen(filename);
+
+    assert(filename_len < MAX_FILENAME_LEN); // We checked this earlier
+    for (ii = (int)(filename_len-1); ii >= 0; ii--)
+    {
+        if (filename[ii] == '.')
+        {
+            suffix_len = filename_len - 1 - (size_t)ii;
+            if (suffix_len != CBM_FILE_TYPE_LEN)
+            {
+                DEBUG("Invalid suffix length %d should be %d",
+                        ii,
+                        CBM_FILE_TYPE_LEN);
+                rc = -EPROTO;
+                goto EXIT;
+            }
+            strncpy(cbm_suffix,
+                    &(filename[ii+1]),
+                    CBM_FILE_TYPE_STR_LEN);
+            cbm_suffix[CBM_FILE_TYPE_STR_LEN-1] = 0;
+            filename_len = (size_t)ii;
+            break;
+        }
+    }
+    if (ii > 0)
+    {
+        strncpy(cbm_filename, filename, (size_t)ii);
+        cbm_filename[ii+1] = 0;
+    }
+    DEBUG("Have filename of %s and suffix of %s", cbm_filename, cbm_suffix);
+
+    entry->type = get_cbm_file_type_from_suffix(cbm_suffix);
+    if ((entry->type != CBM_PRG) &&
+        (entry->type != CBM_SEQ) &&
+        (entry->type != CBM_USR) &&
+        (entry->type != CBM_REL))
+    {
+        DEBUG("Suffix is an invalid CBM file type: %s", cbm_suffix);
+        rc = -EPROTO;
+        goto EXIT;
+    }
+
+    EXIT:
+
+    return rc;
+} 
+
 // Fills in the fuse_filename field in a cbm_file struct, assuming that the
 // cbm_filename, header_id (if type == CBM_DISK_HDR) and type fields are set.
 static void update_fuse_filename_from_cbm(struct cbm_file *entry)
 {
     char *suffix;
-    char *delim = DELIM_FILE;
+    char delim = DELIM_FILE;
+    size_t filename_len;
+    size_t suffix_len;
 
     ENTRY();
 
@@ -547,7 +568,7 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
             break;
         
         case CBM_DISK_HDR:
-            suffix = entry->cbm_header_id[0];
+            suffix = entry->cbm_header_id;
             delim = DELIM_HDR;
             break;
 
@@ -556,20 +577,23 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
         
     }
 
-    // Sanity checks first
-    assert(strnlen(entry->cbm_filename[0], MAX_CBM_FILENAME_STR_LEN) != MAX_CBM_FILENAME_STR_LEN);
-    assert(MAX_FILENAME_LEN >= (MAX_CBM_FILENAME_STR_LEN + 1 + 4));
-
     // Construct the fuse_filename
-    strncpy(entry->fuse_filename[0],
-            entry->cbm_filename[0],
+    filename_len = strnlen(entry->cbm_filename, MAX_CBM_FILENAME_STR_LEN); 
+    assert(filename_len < MAX_CBM_FILENAME_STR_LEN);
+    strncpy(entry->fuse_filename,
+            entry->cbm_filename,
             MAX_CBM_FILENAME_STR_LEN);
-    strncat(entry->fuse_filename[0],
-            delim,
-            1);
-    strncat(entry->fuse_filename[0],
+    cbm_petscii2ascii(entry->fuse_filename);
+
+    assert(MAX_FILENAME_LEN >= (MAX_CBM_FILENAME_STR_LEN + 1 + 3));
+    entry->fuse_filename[filename_len++] = delim;
+    suffix_len = strnlen(suffix, 4);
+    assert(suffix_len < 4);
+    strncpy(entry->fuse_filename+filename_len,
             suffix,
-            3);
+            4);
+    filename_len += suffix_len;
+    assert(filename_len < MAX_FILENAME_LEN);
 
     EXIT();
 
@@ -718,6 +742,8 @@ struct cbm_file *get_next_free_file_entry(CBM *cbm)
         next_file = NULL;
     }
 
+    cbm->num_files++;
+
     EXIT();
 
     return next_file;
@@ -812,10 +838,10 @@ void free_file_entry(CBM *cbm, struct cbm_file *file)
 // both at the same time.
 // Returns a pointer to the entry, or NULL if not found.
 struct cbm_file *find_file_entry(CBM *cbm,
-                                 char *cbm_filename,
-                                 char *fuse_filename)
+                                 const char *cbm_filename,
+                                 const char *fuse_filename)
 {
-    char *filename;
+    const char *filename;
     size_t max_filename_len;
     off_t offset;
     struct cbm_file *entry = NULL;
@@ -845,7 +871,7 @@ struct cbm_file *find_file_entry(CBM *cbm,
 
     for (size_t ii = 0; ii < cbm->num_files; ii++)
     {
-        if (!strncmp((char *)(&(cbm->files[ii]) + offset),
+        if (!strncmp(((char *)(&(cbm->files[ii])) + offset),
                      filename,
                      max_filename_len))
         {
@@ -861,52 +887,14 @@ struct cbm_file *find_file_entry(CBM *cbm,
 }
 
 inline struct cbm_file *find_cbm_file_entry(CBM *cbm,
-                                            char *filename)
+                                            const char *filename)
 {
     return find_file_entry(cbm, filename, NULL);
 }
-inline struct cbm_file *find_dummy_file_entry(CBM *cbm,
-                                              char *filename)
+inline struct cbm_file *find_fuse_file_entry(CBM *cbm,
+                                             const char *filename)
 {
     return find_file_entry(cbm, NULL, filename);
-}
-
-// Returns the file type given the suffix.  Would be better as implemented
-// as an array of mapping structs, but this was quicker.
-static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
-{
-    enum cbm_file_type type = CBM_NONE;
-
-    ENTRY();
-
-   if (strlen(suffix) == ID_LEN)
-    {
-        // We have a header
-        type = CBM_DISK_HDR;
-    }
-    else
-    {
-        if (strncmp(SUFFIX_PRG, suffix, CBM_FILE_TYPE_STR_LEN-1))
-        {
-            type = CBM_PRG;
-        }
-        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
-        {
-            type = CBM_SEQ;
-        }
-        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
-        {
-            type = CBM_USR;
-        }
-        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
-        {
-            type = CBM_REL;
-        }
-    }
-
-    EXIT();
-
-    return type;
 }
 
 // Creates a cbm_file array element
@@ -947,14 +935,16 @@ struct cbm_file *create_file_entry(CBM *cbm,
     size_t max_filename_len;
 
     ENTRY();
+    PARAMS("Filename: %s", filename);
 
     // Check assumptions constraints on inputs
     assert(cbm != NULL);
     assert(filename != NULL);
     assert(error != NULL);
-    assert((source == SOURCE_CBM) || (source == SOURCE_DUMMY));
-    assert(((source == SOURCE_CBM) && (!directory)) ||
-           (source == SOURCE_DUMMY));
+    assert((source == SOURCE_CBM) ||
+           (source == SOURCE_DUMMY) ||
+           (source == SOURCE_FUSE));
+    assert((!directory) || (source == SOURCE_DUMMY));
 
     // Run some initial sanity checks on the data
     if (source == SOURCE_CBM)
@@ -984,10 +974,6 @@ struct cbm_file *create_file_entry(CBM *cbm,
             goto EXIT;
         }
     }
-    else
-    {
-        assert(source == SOURCE_DUMMY);
-    }
 
     // Now attempt to get an entry to fill in
     entry = get_next_free_file_entry(cbm);
@@ -1001,24 +987,22 @@ struct cbm_file *create_file_entry(CBM *cbm,
     // Sort out filenames and entry type
     if (source == SOURCE_CBM)
     {
-        strncpy(entry->cbm_filename[0],
+        strncpy(entry->cbm_filename,
                 filename,
-                CBM_FILE_TYPE_STR_LEN-1);
-        // Don't need to bother with return code for cbm_petscii2ascii - it
-        // changes the string in situ.
-        cbm_petscii2ascii(entry->cbm_filename[0]);
+                MAX_CBM_FILENAME_STR_LEN-1);
+        // Don't convert to PETSCII - it's supposed to be PETSCII
+
         // Dummy files don't have trailing spaces to remove - only CBM ones do
         // Suffix should already have been stripped
-        rc = remove_trailing_spaces(entry->cbm_filename[0]);
+        rc = remove_trailing_spaces(entry->cbm_filename);
         assert(rc < MAX_CBM_FILENAME_STR_LEN-1);
         rc = -1; // reset error
         entry->type = get_cbm_file_type_from_suffix(suffix);
         if (entry->type == CBM_DISK_HDR)
         {
-            strncpy(entry->cbm_header_id[0],
+            strncpy(entry->cbm_header_id,
                     suffix,
                     CBM_ID_STR_LEN-1);
-            cbm_petscii2ascii(entry->cbm_header_id[0]);
         }
         if (entry->type == CBM_NONE)
         {
@@ -1030,11 +1014,8 @@ struct cbm_file *create_file_entry(CBM *cbm,
         }
         update_fuse_filename_from_cbm(entry);
     }
-    else
+    else if (source == SOURCE_DUMMY)
     {
-        strncpy(entry->cbm_filename[0],
-                filename,
-                CBM_FILE_TYPE_STR_LEN-1);
         if (directory)
         {
             entry->type = CBM_DUMMY_DIR;
@@ -1043,7 +1024,22 @@ struct cbm_file *create_file_entry(CBM *cbm,
         {
             entry->type = CBM_DUMMY_FILE;
         }
-        strncpy(entry->fuse_filename[0], filename, CBM_ID_STR_LEN-1);
+        strncpy(entry->fuse_filename, filename, MAX_FUSE_FILENAME_STR_LEN-1);
+    }
+    else
+    {
+        // We expect a filename of the format filename.xyz
+        // where filename is up to MAX_CBM_FILENAME_STR_LEN - 1 chars long
+        // and xyx is exactly 3 chars long - and matches a SUFFIX_* type
+        assert(source == SOURCE_FUSE);
+        strncpy(entry->fuse_filename, filename, MAX_FUSE_FILENAME_STR_LEN);
+        entry->fuse_filename[MAX_FUSE_FILENAME_STR_LEN-1] = 0;
+        rc = update_cbm_filename_from_fuse(entry);
+        if (!rc)
+        {
+            DEBUG("Failed to convert fuse filename to CBM %d", rc);
+            goto EXIT;
+        }
     }
 
     // Sort out filesizes (and contents)
@@ -1072,12 +1068,21 @@ struct cbm_file *create_file_entry(CBM *cbm,
 
 EXIT:
 
-    if ((entry = NULL) && (rc = 0))
+    if (entry == NULL)
     {
-        rc = -1;
+        if (rc == 0)
+        {
+            rc = -1;
+        }
     }
-    assert((entry != NULL) || (rc != 0));
-    assert(!(entry != NULL) && !(rc != 0));
+    else
+    {
+        if (rc != 0)
+        {
+            // Free the entry again
+            free_file_entry(cbm, entry);
+        }
+    } 
     *error = rc;
 
     EXIT();
@@ -1102,6 +1107,22 @@ inline struct cbm_file *create_cbm_file_entry(CBM *cbm,
                              error);
 }
 
+inline struct cbm_file *create_fuse_file_entry(CBM *cbm,
+                                               const char *filename,
+                                               const off_t filesize,
+                                               struct callbacks *cbs,
+                                               int *error)
+{
+    return create_file_entry(cbm,
+                             SOURCE_FUSE,
+                             filename,
+                             NULL,
+                             0,
+                             filesize,
+                             cbs,
+                             error);
+}
+
 inline struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 const char *filename,
                                                 const int directory,
@@ -1119,3 +1140,28 @@ inline struct cbm_file *create_dummy_file_entry(CBM *cbm,
                              error);
 }
 
+int is_dummy_file(struct cbm_file *entry)
+{
+    int is_it;
+
+    // ENTRY();
+
+    assert(entry != NULL);
+
+    switch (entry->type)
+    {
+        case CBM_DISK_HDR:
+        case CBM_DUMMY_DIR:
+        case CBM_DUMMY_FILE:
+            is_it = 1;
+            break;
+
+        default:
+            is_it = 0;
+            break;
+    }
+
+    // EXIT();
+
+    return is_it;
+}

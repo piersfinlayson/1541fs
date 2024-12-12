@@ -73,6 +73,8 @@ int main(int argc, char *argv[])
     CBM *cbm;
     int ret = 1;
 
+    init_logging();
+
     // Set up first, as the signal handler will need access
     DEBUG("Allocate private data");
     cbm = malloc(sizeof(struct cbm_state));
