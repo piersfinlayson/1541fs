@@ -58,7 +58,7 @@ int allocate_free_channel(CBM *cbm,
             cbm->channel[ch].open = 1;
             cbm->channel[ch].usage = usage;
             cbm->channel[ch].file = entry;
-            assert(entry->channel != NULL);
+            assert(entry->channel == NULL);
             entry->channel = &(cbm->channel[ch]);
             break;
         }

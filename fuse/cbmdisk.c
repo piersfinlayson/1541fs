@@ -267,14 +267,13 @@ static int release_file_on_disk(CBM *cbm,
     }
 
     // Clear the channel handles
-    if ((entry->channel->handle1 != NULL) ||
-        (entry->channel->handle2 != 0))
+    if (entry->channel->handle1 != NULL)
     {
         DEBUG("Freeing buffer stored in channel");
         free(entry->channel->handle1);
         entry->channel->handle1 = NULL;
-        entry->channel->handle2 = 0;
     }
+    entry->channel->handle2 = 0;
 
     // Release channel back to pool
     release_channel(cbm, entry->channel->num);
@@ -385,8 +384,7 @@ static int read_file_from_disk(CBM *cbm,
         DEBUG("Read in file in %d byte chunks", CBM_BLOCK_SIZE);
 
         // Allocate temporary buffer to read entire file into
-        assert(entry->filesize >= 0);
-        len = (size_t)entry->filesize;
+        len = (size_t)entry->st.st_size;
         temp_buf = malloc(len);
         if (temp_buf == NULL)
         {

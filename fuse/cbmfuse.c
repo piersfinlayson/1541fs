@@ -166,8 +166,8 @@ static int cbm_getattr(const char *path,
     else if (strcmp(path, "/") && (path[0] == '/'))
     {
         // Skip the initial
-        actual_path = path+1;
         DEBUG("Make path %s", actual_path);
+        actual_path = path+1;
     }
     else
     {
@@ -475,7 +475,7 @@ static int cbm_release(const char *path, struct fuse_file_info *fi)
 
     if (entry->cbs.open != NULL)
     {
-        DEBUG("Use open callback");
+        DEBUG("Use release callback");
         rc = entry->cbs.release(cbm,
                                 entry->cbs.handle,
                                 entry,
