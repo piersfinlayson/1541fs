@@ -256,6 +256,9 @@ static int release_file_on_disk(CBM *cbm,
             assert(0);
     }
 
+    assert(entry->channel->num >= 0);
+    assert(entry->channel->num < MAX_CHANNEL);
+
     // Attempt to close the channel
     rc = cbm_close(cbm->fd, cbm->device_num, (unsigned char)entry->channel->num);
     if (rc)
@@ -276,11 +279,13 @@ static int release_file_on_disk(CBM *cbm,
     entry->channel->handle2 = 0;
 
     // Release channel back to pool
+    int ch = entry->channel->num;
     release_channel(cbm, entry->channel->num);
+    assert(entry->channel == NULL);
 
     DEBUG("Succeedding in releasing %s channel %d",
           entry->fuse_filename,
-          entry->channel->num);
+          ch);
     rc = 0;
 
 EXIT:

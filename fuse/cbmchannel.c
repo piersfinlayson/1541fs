@@ -81,6 +81,8 @@ EXIT:
 // (these aren't "allocated" in the first place)
 void release_channel(CBM *cbm, int ch)
 {
+    ENTRY();
+
     assert(cbm != NULL);
     assert((ch >= 0) && (ch < NUM_CHANNELS));
 
@@ -105,5 +107,6 @@ void release_channel(CBM *cbm, int ch)
 
     assert(cbm->channel[ch].num == ch);
     assert(!cbm->channel[ch].open);
-}
 
+    EXIT();
+}
