@@ -191,7 +191,7 @@ static int handle_dummy_read(CBM *cbm,
 
     // Copy the correct bit of the file into the buffer
     assert(dentry->contents != NULL);
-    assert(offset > 0);
+    assert(offset >= 0);
     if (offset < dentry->filesize)
     {
         if ((size_t)offset + size > (size_t)dentry->filesize)
