@@ -40,8 +40,6 @@ extern int current_log_level;
 #ifdef DEBUG_BUILD
 #define DEBUG(format, ...) \
     if (current_log_level >= LOG_DEBUG) syslog(LOG_DEBUG, PAD format, ##__VA_ARGS__)
-#define DEBUG_NO_PAD(format, ...) \
-    if (current_log_level >= LOG_DEBUG) syslog(LOG_DEBUG, format, ##__VA_ARGS__)
 #define ENTRY(...) \
     if (current_log_level >= LOG_DEBUG) \
         syslog(LOG_DEBUG, "ENTRY:  %s() %s, %d", __func__, __FILE__, __LINE__ ##__VA_ARGS__);
@@ -51,7 +49,6 @@ extern int current_log_level;
 #define PARAMS(format, ...) DEBUG("PARAMS: %s() " format, __func__, ##__VA_ARGS__);
 #else // DEBUG_BUILD
 #define DEBUG(format, ...)
-#define DEBUG_NO_PAD(format, ...)
 #define ENTRY(...)
 #define EXIT(...)
 #define PARAMS(format, ...)

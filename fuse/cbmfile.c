@@ -1276,65 +1276,30 @@ int is_dummy_file(struct cbm_file *entry)
 void log_file_entries(CBM *cbm)
 {
     struct cbm_file *e;
-    char *format_str;
 
     assert(cbm != NULL);
 
     ENTRY();
 
-    // The code here is very tedious.  Different platforms have different
-    // size st_blksize and st_nlink.  On x86 I've found them to be 8 bytes
-    // (longs).  However on ARM64, they are 4 bytes.  So, we need to use
-    // different format specifiers.  This code assumes they are the same
-    // size.  I guess it's possible the kernel has been compiled with them
-    // being different sizes,  in which case these asserts will fire.
-    // As they will if anything other than 4 and 8 byte sized versions are
-    // used.
-    // Also GCC throws a git if you don't use a static defined format
-    // specifier and are using the -Wformat-nonliteral (and have warnings
-    // as errors).  So we need to disable this warning.
-    // It might be feasible just to use %zu on platforms that use 4 byte
-    // sizes, but then again it might not.  So I'm taking this approach.
-    // All of this just to do some logging!
     for (int ii = 0; ii < (int)(cbm->num_files); ii++)
     {
         e = cbm->files+ii;
-        if (sizeof(e->st.st_blksize) == 4)
-        {
-            assert(sizeof(e->st.st_nlink) == 4);
-            format_str =
-                "%s File entry: Type %d CBM %s FUSE %s cbm_blocks %jd "
-                "filesize %jd not_yet_on_disk %d channel 0x%p "
-                "st_size %zu st_blocks %jd st_blksize %u",
-                " st_mode: 0%o, st_nlink: %u"; 
-        }
-        else
-        {
-            assert(sizeof(e->st.st_blksize) == 8);
-            assert(sizeof(e->st.st_blksize) == 8);
-            format_str =
-                "%s File entry: Type %d CBM %s FUSE %s cbm_blocks %jd "
-                "filesize %jd not_yet_on_disk %d channel 0x%p "
-                "st_size %zu st_blocks %jd st_blksize %zu",
-                " st_mode: 0%o, st_nlink: %zu"; 
-        }
-#pragma GCC diagnostic push 
-#pragma GCC diagnostic ignored "-Wformat-nonliteral"
-        DEBUG_NO_PAD(format_str,
-                     PAD,
-                     e->type,
-                     e->cbm_filename,
-                     e->fuse_filename,
-                     e->cbm_blocks,
-                     e->filesize,
-                     e->not_yet_on_disk,
-                     (void*)(e->channel),
-                     e->st.st_size,
-                     e->st.st_blocks,
-                     e->st.st_blksize,
-                     e->st.st_mode,
-                     e->st.st_nlink);
-#pragma GCC diagnostic pop
+        DEBUG("File entry: Type %d CBM %s FUSE %s cbm_blocks %jd "
+              "filesize %jd not_yet_on_disk %d channel 0x%p "
+              "st_size %zu st_blocks %jd st_blksize %zu"
+              " st_mode: 0%o, st_nlink: %zu", 
+              e->type,
+              e->cbm_filename,
+              e->fuse_filename,
+              e->cbm_blocks,
+              e->filesize,
+              e->not_yet_on_disk,
+              (void*)(e->channel),
+              e->st.st_size,
+              e->st.st_blocks,
+              (size_t)(e->st.st_blksize),
+              e->st.st_mode,
+              (size_t)(e->st.st_nlink));
     }
 
     EXIT();
