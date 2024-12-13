@@ -10,8 +10,8 @@ LIBS = -lopencbm -lfuse3 -lpthread
 TARGET = 1541fs-fuse
 SRC = cbmargs.c     \
       cbmchannel.c  \
-	  cbmdisk.c     \
-	  cbmdummy.c    \
+      cbmdisk.c     \
+      cbmdummy.c    \
       cbmfile.c     \
       cbmfuse.c     \
       cbmlog.c      \
@@ -28,6 +28,9 @@ CPPFLAGS += -DVERSION=\"$(VERSION)\" -DDEBUG_BUILD
 # Dependencies
 DEPS = $(OBJ:.o=.d)
 CFLAGS += -MMD -MP
+
+# Add a rule to redirect bare .o targets to obj/ directory
+%.o: obj/%.o ;
 
 $(TARGET): $(OBJ) | obj
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
