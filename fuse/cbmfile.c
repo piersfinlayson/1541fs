@@ -361,7 +361,7 @@ static int process_dir_listing(CBM *cbm, char *buffer, size_t data_len)
 
 EXIT:
 
-    if (!rc)
+    if (!rc) // Succeeded!
     {
         DEBUG("Number of directory entries read: %d", line_count);
     }

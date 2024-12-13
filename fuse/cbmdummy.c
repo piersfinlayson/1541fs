@@ -79,7 +79,9 @@ static int check_dummy_valid(int handle)
     }
     else
     {
-        DEBUG("Valid dummy file %d %s", handle, dummies[handle-1].filename);
+        DEBUG("Valid dummy file %d %s",
+              handle,
+              dummies[handle-1].filename);
         rc = 0;
     }
 
@@ -101,12 +103,13 @@ static int handle_dummy_open(CBM *cbm,
     ENTRY();
 
     rc = check_dummy_valid(handle);
-    if (!rc)
+    if (rc)
     {
         goto EXIT;
     }
 
     fi->fh = DUMMY_CHANNEL;
+    rc = 0;
 
 EXIT:
 
@@ -130,13 +133,14 @@ static int handle_dummy_release(CBM *cbm,
     ENTRY();
 
     rc = check_dummy_valid(handle);
-    if (!rc)
+    if (rc)
     {
         goto EXIT;
     }
 
     // Don't know if we should reset this or not - but we will anyway
     fi->fh = 0;
+    rc = 0;
 
 EXIT:
 
@@ -164,7 +168,7 @@ static int handle_dummy_read(CBM *cbm,
     ENTRY();
 
     rc = check_dummy_valid(handle);
-    if (!rc)
+    if (rc)
     {
         goto EXIT;
     }
@@ -226,7 +230,7 @@ static int handle_dummy_write(CBM *cbm,
     ENTRY();
 
     rc = check_dummy_valid(handle);
-    if (!rc)
+    if (rc)
     {
         goto EXIT;
     }

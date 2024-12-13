@@ -166,8 +166,8 @@ static int cbm_getattr(const char *path,
     else if (strcmp(path, "/") && (path[0] == '/'))
     {
         // Skip the initial
-        DEBUG("Make path %s", actual_path);
         actual_path = path+1;
+        DEBUG("Make path %s", actual_path);
     }
     else
     {

@@ -292,7 +292,7 @@ EXIT:
         locked = 0;
     }
 
-    if (!rc)
+    if (!rc) // Succeeded
     {
         // Don't know if we should reset this or not - but we will anyway
         fi->fh = 0;
