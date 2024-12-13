@@ -455,6 +455,9 @@ extern struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 struct callbacks *cbs,
                                                 int *error);
 extern int is_dummy_file(struct cbm_file *entry);
+#ifdef DEBUG_BUILD
+extern void log_file_entries(CBM *cbm);
+#endif // DEBUG_BUILD
 
 // cbmfuse.c
 extern void cbm_destroy(void *private_data);

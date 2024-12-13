@@ -398,6 +398,10 @@ int read_dir_from_disk(CBM *cbm)
     cbm->dir_is_clean = 1;
     rc = 0;
 
+#ifdef DEBUG_BUILD
+    log_file_entries(cbm);
+#endif // DEBUG_BUILD
+
 EXIT:
 
     EXIT();
@@ -1265,3 +1269,36 @@ int is_dummy_file(struct cbm_file *entry)
 
     return is_it;
 }
+
+#ifdef DEBUG_BUILD
+// Make DEBUG logs, one for each cbm_file entry
+void log_file_entries(CBM *cbm)
+{
+    struct cbm_file *e;
+    assert(cbm != NULL);
+
+    ENTRY();
+
+    for (int ii = 0; ii < (int)(cbm->num_files); ii++)
+    {
+        e = cbm->files+ii;
+        DEBUG("File entry: Type %d CBM %s FUSE %s cbm_blocks %jd filesize %jd not_yet_on_disk %d channel 0x%p st_size %zu st_blocks %jd st_blksize %zu st_mode: 0%o, st_nlink: %zu",
+              e->type,
+              e->cbm_filename,
+              e->fuse_filename,
+              e->cbm_blocks,
+              e->filesize,
+              e->not_yet_on_disk,
+              (void*)(e->channel),
+              e->st.st_size,
+              e->st.st_blocks,
+              e->st.st_blksize,
+              e->st.st_mode,
+              e->st.st_nlink);
+    }
+
+    EXIT();
+
+    return;
+}
+#endif // DEBUG_BUILD

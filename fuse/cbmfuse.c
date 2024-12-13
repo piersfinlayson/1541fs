@@ -158,18 +158,12 @@ static int cbm_getattr(const char *path,
         goto EXIT;
     }
 
-    // Custom / handling - not a dummy file
+    // Set up actual path appropriately
     if (!strcmp(path, "/"))
     {
-        stbuf->st_nlink = 2;
-        stbuf->st_mode |= S_IFDIR | 0555;
-        stbuf->st_blksize = CBM_BLOCK_SIZE;
-        rc = 0;
-        goto EXIT;
+        actual_path = ".";
     }
-
-    assert(strlen(path) >= 1);
-    if (strcmp(path, "/") && (path[0] == '/'))
+    else if (strcmp(path, "/") && (path[0] == '/'))
     {
         // Skip the initial
         DEBUG("Make path %s", actual_path);
