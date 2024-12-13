@@ -1289,6 +1289,8 @@ void log_file_entries(CBM *cbm)
         // bytes.
         // Some might say this is unhelpful.  Some might also say that having the ability for 2^64 block sizes, and nlinks is overkill,
         // but hey, I just work here.
+        // The case to size_t allows us to use %zu safely, and avoid any
+        // gc warnings (which are configured to be errors)
         DEBUG("File entry: Type %d CBM %s FUSE %s cbm_blocks %jd "
               "filesize %jd not_yet_on_disk %d channel 0x%p "
               "st_size %zu st_blocks %jd st_blksize %zu"
