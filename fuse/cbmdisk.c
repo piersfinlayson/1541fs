@@ -222,7 +222,6 @@ static int release_file_on_disk(CBM *cbm,
 
     assert(cbm != NULL);
     assert(entry != NULL);
-    assert(entry->channel != NULL);
     assert(path != NULL);
     assert(fi != NULL);
 
@@ -250,6 +249,7 @@ static int release_file_on_disk(CBM *cbm,
         case CBM_REL:
         case CBM_USR:
         case CBM_SEQ:
+            assert(entry->channel != NULL);
             break;
 
         default:
@@ -338,7 +338,6 @@ static int read_file_from_disk(CBM *cbm,
     assert(entry != NULL);
     assert(path != NULL);
     assert(buf != NULL);
-    assert(entry->channel != NULL);
 
     pthread_mutex_lock(&(cbm->mutex));
     locked = 1;
@@ -346,6 +345,13 @@ static int read_file_from_disk(CBM *cbm,
     switch (entry->type)
     {
         case CBM_DISK_HDR:
+            // Check channel is set to be DUMMY_CHANNEL
+            if (fi->fh != DUMMY_CHANNEL)
+            {
+                WARN("Request to read disk header on non-dummy channel %zu", fi->fh);
+                rc = -ENOENT;
+                goto EXIT;
+            }
             DEBUG("Read completed for disk header (0 bytes)");
             rc = 0;
             goto EXIT;
@@ -355,6 +361,8 @@ static int read_file_from_disk(CBM *cbm,
         case CBM_REL:
         case CBM_USR:
         case CBM_SEQ:
+            // Check we have an open channel
+            assert(entry->channel != NULL);
             break;
 
         default:
@@ -509,7 +517,6 @@ static int write_file_to_disk(struct cbm_state *cbm,
     assert(entry != NULL);
     assert(path != NULL);
     assert(buf != NULL);
-    assert(entry->channel != NULL);
 
     pthread_mutex_lock(&(cbm->mutex));
     locked = 1;
@@ -517,6 +524,13 @@ static int write_file_to_disk(struct cbm_state *cbm,
     switch (entry->type)
     {
         case CBM_DISK_HDR:
+            // Check the channel
+            if (fi->fh != DUMMY_CHANNEL)
+            {
+                WARN("Attempt to write disk header on non-dummy channel %zu", fi->fh);
+                rc = -ENOENT;
+                goto EXIT;
+            }
             DEBUG("Write failed for disk header");
             rc = -EROFS;
             goto EXIT;
@@ -526,6 +540,8 @@ static int write_file_to_disk(struct cbm_state *cbm,
         case CBM_REL:
         case CBM_USR:
         case CBM_SEQ:
+            // Check we've an allocate channel
+            assert(entry->channel != NULL);
             break;
 
         default:
