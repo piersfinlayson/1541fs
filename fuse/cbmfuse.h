@@ -107,11 +107,9 @@ extern int current_log_level;
 #define CBM_ID_STR_LEN       2+1      // 2 chars, plus 1 for NULL terminator
 #define CBM_FILE_TYPE_LEN 3
 #define CBM_FILE_TYPE_STR_LEN CBM_FILE_TYPE_LEN+1  // 3 chars, 1 terminator
-#define MAX_FILENAME_LEN 16+1+3+1 // 16 chars + 1 for period + 3 for file ending + 1 null terminator
 #define MAX_HEADER_LEN   16+1+2+1 // 16 chars + 1 for comma + 2 for ID + 1 null terminator
 #define MAX_FILE_LEN     16
-#define ID_LEN           2
-#define DUMMY_FILE_SUFFIX_LEN 3+1
+#define CBM_ID_LEN       2
 
 #define DELIM_FILE  '.'
 #define DELIM_HDR   ','
@@ -199,6 +197,10 @@ enum cbm_file_type
 #define SUFFIX_SEQ  "SEQ"
 #define SUFFIX_REL  "REL"
 #define SUFFIX_USR  "USR"
+#define SUFFIX_PRG_LOWER  "prg"
+#define SUFFIX_SEQ_LOWER  "seq"
+#define SUFFIX_REL_LOWER  "rel"
+#define SUFFIX_USR_LOWER  "usr"
 
 // Used by create_file_entry() in cbmfile.c
 enum file_source
@@ -293,47 +295,6 @@ struct cbm_file
     // Callbacks.  If NULL that function (read/write) will not be supported
     // for this file
     struct callbacks cbs;
-};
-
-// Information about an entry from the disk directory.  May be either a header
-// (disk name,ID), or a file (name.suffix).
-struct cbm_dir_entry
-{
-    // Number of blocks on the disk used by this file.  Note that Commodore
-    // disk blocks are 256 bytes, whereas FUSE expects to be provided the
-    // number of 512 byte blocks, so we need to convert.
-    unsigned short num_blocks;
-
-    // Filesize in bytes.  Technically this isn't correct as it's calculated
-    // by multiplying the number of blocks by 256.  But we wouldn't know the
-    // correct value without reading the entire file, which we won't do.  This
-    // may lead to some unexpected behaviour, if this filesize is relied upon
-    // when listing then processing files.
-    unsigned int filesize;
-
-    // Filename.  We use the convention of stripping and trailing spaces
-    // from the filename from disk, the appending a suffix, preceeeded by a
-    // period, indicating the Commodore file type - so .prg .usr .seq .rel
-    // etc.  If the file stored is called test and a PRG file, it'll be
-    // stored and shown as test.prg.  Note that if a file test.prg is stored
-    // as a prg, it will be called test.prg.prg.  Any spaces within the
-    // filename including at the beginning will be retained.
-    char filename[MAX_FILENAME_LEN];
-
-    // indicates whether should be treated as a directory.
-    // In terms of entries read from disk only the header is a directory.
-    // However, we also use this struct for special_dirs (and files).
-    unsigned char is_dir;
-
-    // Indicates whether this is a file representing the header of
-    // the disk (i.e. the disk name and ID).  These are separated using a
-    // comma, rather than a period, which is a common Commodore convention.
-    // E.g. "scratch disk,01" without the quotes.
-    unsigned char is_header;
-
-    // Indicates wther this is a special file (made up and exposed by 1541fs
-    // in order to provide additional information or functionality
-    unsigned char is_special;
 };
 
 // Our FUSE private data.  When called by FUSE, this can be retrieved via

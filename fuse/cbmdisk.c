@@ -66,7 +66,7 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
         DEBUG("Header name too long");
         goto EXIT;
     }
-    if (strlen(id) != ID_LEN)
+    if (strlen(id) != CBM_ID_LEN)
     {
         DEBUG("ID not 2 chars long: %lu %s", strlen(id), id);
         goto EXIT;

@@ -262,8 +262,8 @@ static int process_dir_listing(CBM *cbm, char *buffer, size_t data_len)
                     // Any other char just gets added to the filename
                     // We'll cope with trailing spaces when appending the .XXX
                     // suffix
-                    // We sade 5 chars for the 4 digit suffix and 1xNULL terminator
-                    if (filename_len < (MAX_FILENAME_LEN - 5))
+                    // We save 4 chars for the 3 digit suffix and 1xNULL terminator
+                    if (filename_len < (MAX_FUSE_FILENAME_STR_LEN - 4))
                     {
                         filename[filename_len++] = c;
                     }
@@ -437,7 +437,7 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
 
     ENTRY();
 
-    if (strlen(suffix) == ID_LEN)
+    if (strlen(suffix) == CBM_ID_LEN)
     {
         // We have a header
         type = CBM_DISK_HDR;
@@ -473,7 +473,6 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
 static int update_cbm_filename_from_fuse(struct cbm_file *entry)
 {
     int rc = -1;
-    char cbm_filename[MAX_CBM_FILENAME_STR_LEN];
     char cbm_suffix[CBM_FILE_TYPE_STR_LEN];
     char *filename;
     size_t filename_len;
@@ -486,12 +485,20 @@ static int update_cbm_filename_from_fuse(struct cbm_file *entry)
     filename = entry->fuse_filename;
     filename_len = strlen(filename);
 
-    assert(filename_len < MAX_FILENAME_LEN); // We checked this earlier
+    // We already checked this
+    assert(filename_len < MAX_FUSE_FILENAME_STR_LEN);
+
+    // We use an int for ii because theoretically ii could start at -1
+    // with a zero length string, which itself is maybe possible
+    // We're searching backwards through the fuse filename in order to find
+    // the . delimiter, as the part following the delimiter shows us the
+    // CBM file type
+    suffix_len = 0;
     for (ii = (int)(filename_len-1); ii >= 0; ii--)
     {
         if (filename[ii] == '.')
         {
-            suffix_len = filename_len - 1 - (size_t)ii;
+            // suffix_len shows us the length of the suffix!
             if (suffix_len != CBM_FILE_TYPE_LEN)
             {
                 DEBUG("Invalid suffix length %d should be %d",
@@ -500,33 +507,55 @@ static int update_cbm_filename_from_fuse(struct cbm_file *entry)
                 rc = -EPROTO;
                 goto EXIT;
             }
-            strncpy(cbm_suffix,
-                    &(filename[ii+1]),
-                    CBM_FILE_TYPE_STR_LEN);
-            cbm_suffix[CBM_FILE_TYPE_STR_LEN-1] = 0;
+
+            // Copy the suffix temporarily to cbm_suffix
+            assert(suffix_len < CBM_FILE_TYPE_STR_LEN);
+            strcpy(cbm_suffix, filename+ii+1);
+
+            // Remove the suffix from the filename by NULL terminating at
+            // the delimiter
+            filename[ii] = 0;
+            assert(ii >= 0);
             filename_len = (size_t)ii;
             break;
         }
+        suffix_len++;
     }
-    if (ii > 0)
+
+    if (ii >= 0)
     {
-        strncpy(cbm_filename, filename, (size_t)ii);
-        cbm_filename[ii+1] = 0;
+        // We found the suffix (i.e. we broke out of the for loop before ii
+        // hit -1)
+        // Copy the fileame (which now doesn't have the suffix) into
+        // cbm_filename
+        assert(filename_len < MAX_CBM_FILENAME_STR_LEN);
+        strcpy(entry->cbm_filename, filename);
+
+        // Now convert it to PETSCII as that's how we store cbm_filename
+        cbm_ascii2petscii(entry->cbm_filename);
     }
-    DEBUG("Have filename of %s and suffix of %s", cbm_filename, cbm_suffix);
+    DEBUG("Have cbm_filename of %s and suffix of %s",
+          entry->cbm_filename,
+          cbm_suffix);
 
     entry->type = get_cbm_file_type_from_suffix(cbm_suffix);
-    if ((entry->type != CBM_PRG) &&
-        (entry->type != CBM_SEQ) &&
-        (entry->type != CBM_USR) &&
-        (entry->type != CBM_REL))
+    switch (entry->type)
     {
-        DEBUG("Suffix is an invalid CBM file type: %s", cbm_suffix);
-        rc = -EPROTO;
-        goto EXIT;
+        case CBM_PRG:
+        case CBM_SEQ:
+        case CBM_USR:
+        case CBM_REL:
+            rc = 0;
+            break;
+
+        default:
+            DEBUG("Suffix is an invalid CBM file type: %s", cbm_suffix);
+            rc = -EPROTO;
+            goto EXIT;
+            break;
     }
 
-    EXIT:
+EXIT:
 
     return rc;
 } 
@@ -536,7 +565,7 @@ static int update_cbm_filename_from_fuse(struct cbm_file *entry)
 static void update_fuse_filename_from_cbm(struct cbm_file *entry)
 {
     char *suffix;
-    char delim = DELIM_FILE;
+    char delim_char = DELIM_FILE;
     size_t filename_len;
     size_t suffix_len;
 
@@ -552,24 +581,24 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
     switch (entry->type)
     {
         case CBM_PRG:
-            suffix = SUFFIX_PRG;
+            suffix = SUFFIX_PRG_LOWER;
             break;
 
         case CBM_SEQ:
-            suffix = SUFFIX_SEQ;
+            suffix = SUFFIX_SEQ_LOWER;
             break;
         
         case CBM_USR:
-            suffix = SUFFIX_USR;
+            suffix = SUFFIX_USR_LOWER;
             break;
         
         case CBM_REL:
-            suffix = SUFFIX_REL;
+            suffix = SUFFIX_REL_LOWER;
             break;
         
         case CBM_DISK_HDR:
             suffix = entry->cbm_header_id;
-            delim = DELIM_HDR;
+            delim_char = DELIM_HDR;
             break;
 
         default:
@@ -577,23 +606,24 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
         
     }
 
-    // Construct the fuse_filename
-    filename_len = strnlen(entry->cbm_filename, MAX_CBM_FILENAME_STR_LEN); 
+    // Construct the fuse_filename - first the bit before the delimiter
+    filename_len = strlen(entry->cbm_filename);
     assert(filename_len < MAX_CBM_FILENAME_STR_LEN);
-    strncpy(entry->fuse_filename,
-            entry->cbm_filename,
-            MAX_CBM_FILENAME_STR_LEN);
+    assert(MAX_CBM_FILENAME_STR_LEN <= MAX_FUSE_FILENAME_STR_LEN);
+    strcpy(entry->fuse_filename, entry->cbm_filename);
     cbm_petscii2ascii(entry->fuse_filename);
 
-    assert(MAX_FILENAME_LEN >= (MAX_CBM_FILENAME_STR_LEN + 1 + 3));
-    entry->fuse_filename[filename_len++] = delim;
+    // Now the delimiter
+    assert(MAX_FUSE_FILENAME_STR_LEN >= (MAX_CBM_FILENAME_STR_LEN + 1));
+    entry->fuse_filename[filename_len++] = delim_char;
+
+    // Now add the suffix
+    assert(MAX_FUSE_FILENAME_STR_LEN >= (MAX_CBM_FILENAME_STR_LEN + 1 + 3));
     suffix_len = strnlen(suffix, 4);
     assert(suffix_len < 4);
-    strncpy(entry->fuse_filename+filename_len,
-            suffix,
-            4);
+    strcpy(entry->fuse_filename+filename_len, suffix);
     filename_len += suffix_len;
-    assert(filename_len < MAX_FILENAME_LEN);
+    assert(filename_len < MAX_FUSE_FILENAME_STR_LEN);
 
     EXIT();
 
@@ -932,10 +962,27 @@ struct cbm_file *create_file_entry(CBM *cbm,
 {
     struct cbm_file *entry = NULL;
     int rc =-1;
+    int rc2;
     size_t max_filename_len;
+    size_t suffix_len;
 
     ENTRY();
-    PARAMS("Filename: %s", filename);
+    PARAMS("Source %d Filename %s Directory %d Size %jd Cbs 0x%p",
+           source,
+           filename,
+           directory,
+           size,
+           (void *)cbs);
+
+    // Processing
+    // * Checks
+    // * Get a free cbm_file entry 
+    // * Store off the name
+    // * Figure out the type
+    // * Store off size information
+    // * Create stat information
+    // If anything goes wrong free the cbm_file entry and return the error
+    // code
 
     // Check assumptions constraints on inputs
     assert(cbm != NULL);
@@ -946,36 +993,67 @@ struct cbm_file *create_file_entry(CBM *cbm,
            (source == SOURCE_FUSE));
     assert((!directory) || (source == SOURCE_DUMMY));
 
-    // Run some initial sanity checks on the data
+    // Name processing differs for different sources and storage type
+    // * cbm_filename and cbm_header_id are stored as PETSCII
+    // * fuse_filename is stored as ASCII
+    // * If the source is SOURCE_DUMMY or SOURCE_FUSE we are provided
+    //   a fuse_filename (in ASCII)
+    // * If the source is SOURCE_CBM it's a fuse_filename (in PETSCII)
+    // * For a SOURCE_FUSE file we need to create cbm_filename (PETSCII)
+    // * For a SOURCE_CBM file we need to create the fuse_filename (ASCII)
+    // * for a SOURCE_DUMMY file we don't need a cbm_filename as we'll never
+    //   represent it on disk
+
+    // Run some initial sanity checks on the name data
     if (source == SOURCE_CBM)
     {
         max_filename_len = MAX_CBM_FILENAME_STR_LEN;
     }
     else
     {
+        // FUSE and DUMMY files have the same filename length limit
         max_filename_len = MAX_FUSE_FILENAME_STR_LEN;
     }
-    if (strlen(filename) >= max_filename_len)
+    if (strnlen(filename, max_filename_len) >= max_filename_len)
     {
-        DEBUG("Filename is too long: %s", filename);
+        DEBUG("Filename is too long: %s %jd limit",
+              filename,
+              max_filename_len-1);
         rc = -ENAMETOOLONG;
         goto EXIT;
     }
-
     if (suffix != NULL)
     {
+        // Only souce CBM has a suffix provided separately - it's part of the
+        // filename FUSE/DUMMY (linux) case
         assert(source == SOURCE_CBM);
+        PARAMS("Suffix: %s", suffix);
+
+        // The ID suffix is 2 bytes, the file type suffix is 3
+        // So the suffix should be 3 or fewer bytes 
         assert(CBM_ID_STR_LEN <= CBM_FILE_TYPE_STR_LEN);
-        assert(DUMMY_FILE_SUFFIX_LEN <= CBM_FILE_TYPE_STR_LEN);
-        if (strnlen(suffix, CBM_FILE_TYPE_STR_LEN) >= CBM_FILE_TYPE_STR_LEN)
+        suffix_len = strnlen(suffix, CBM_FILE_TYPE_STR_LEN); 
+        if (suffix_len >= CBM_FILE_TYPE_STR_LEN)
         {
-            DEBUG("Suffix is too long: %s", suffix);
+            DEBUG("Suffix is too long: %s %d limit", 
+                  suffix,
+                  CBM_FILE_TYPE_STR_LEN);
             rc = -ENAMETOOLONG;
+            goto EXIT;
+        }
+        else if (suffix_len < CBM_ID_LEN)
+        {
+            DEBUG("Suffix is too short: %s %zu %d limit",
+                  suffix,
+                  suffix_len,
+                  CBM_ID_LEN);
+            rc = -EPROTO;  // There isn't a too short error
             goto EXIT;
         }
     }
 
-    // Now attempt to get an entry to fill in
+    // Now that we've done some checks on the filename and suffix we can
+    // attempt to get an entry to fill in
     entry = get_next_free_file_entry(cbm);
     if (entry == NULL)
     {
@@ -984,63 +1062,86 @@ struct cbm_file *create_file_entry(CBM *cbm,
         goto EXIT;
     }
 
-    // Sort out filenames and entry type
-    if (source == SOURCE_CBM)
+    // File in the filenames and figure out the cbm_file_type
+    // Do this as a switch to make it more readable than if/else
+    switch(source)
     {
-        strncpy(entry->cbm_filename,
-                filename,
-                MAX_CBM_FILENAME_STR_LEN-1);
-        // Don't convert to PETSCII - it's supposed to be PETSCII
+        case SOURCE_CBM:
+            // We know the filename will fit
+            assert(strlen(filename) < MAX_CBM_FILENAME_STR_LEN);
+            strcpy(entry->cbm_filename, filename);
 
-        // Dummy files don't have trailing spaces to remove - only CBM ones do
-        // Suffix should already have been stripped
-        rc = remove_trailing_spaces(entry->cbm_filename);
-        assert(rc < MAX_CBM_FILENAME_STR_LEN-1);
-        rc = -1; // reset error
-        entry->type = get_cbm_file_type_from_suffix(suffix);
-        if (entry->type == CBM_DISK_HDR)
-        {
-            strncpy(entry->cbm_header_id,
-                    suffix,
-                    CBM_ID_STR_LEN-1);
-        }
-        if (entry->type == CBM_NONE)
-        {
-            WARN("Unrecognised CBM file type: %s", suffix);
-            rc = -EPROTO;
-            free_file_entry(cbm, entry);
-            entry = NULL;
-            goto EXIT;
-        }
-        update_fuse_filename_from_cbm(entry);
+            // Leave as PETSCII but remove any trailing spaces
+            // Return code is the new string length
+            // Note it could be zero length (if the filename is all spaces)
+            rc2 = remove_trailing_spaces(entry->cbm_filename);
+            assert(rc2 <= MAX_CBM_FILENAME_STR_LEN - 1);
+
+            // Get the cbm_file_type
+            entry->type = get_cbm_file_type_from_suffix(suffix);
+            switch (entry->type)
+            {
+                case CBM_DISK_HDR:
+                    assert(strlen(suffix) < CBM_ID_STR_LEN);
+                    strcpy(entry->cbm_header_id, suffix);
+
+                case CBM_PRG:
+                case CBM_SEQ:
+                case CBM_REL:
+                case CBM_USR:
+                    ;
+                    break;
+
+                default:
+                    // Code after EXIT: label will free entry
+                    WARN("Unrecognised CBM file type %s - ignoring file",
+                         suffix);
+                    rc = -EPROTO;
+                    goto EXIT;
+                    break;
+            }
+
+            // Create the FUSE filename given the CBM one
+            update_fuse_filename_from_cbm(entry);
+            break;
+
+        case SOURCE_DUMMY:
+            // We've already checked the filename length
+            strcpy(entry->fuse_filename, filename);
+            entry->type = directory ? CBM_DUMMY_DIR : CBM_DUMMY_FILE;
+            break;
+
+        case SOURCE_FUSE:
+            // We've already checked the filename length
+            strcpy(entry->fuse_filename, filename);
+            rc2 = update_cbm_filename_from_fuse(entry);
+            if (!rc2)
+            {
+                DEBUG("Failed to convert fuse filename to CBM %d", rc);
+                rc = -EPROTO;
+                goto EXIT;
+            }
+            break;
+
+        default:
+            // Invalid source
+            assert(0);
     }
-    else if (source == SOURCE_DUMMY)
-    {
-        if (directory)
-        {
-            entry->type = CBM_DUMMY_DIR;
-        }
-        else
-        {
-            entry->type = CBM_DUMMY_FILE;
-        }
-        strncpy(entry->fuse_filename, filename, MAX_FUSE_FILENAME_STR_LEN-1);
-    }
-    else
-    {
-        // We expect a filename of the format filename.xyz
-        // where filename is up to MAX_CBM_FILENAME_STR_LEN - 1 chars long
-        // and xyx is exactly 3 chars long - and matches a SUFFIX_* type
-        assert(source == SOURCE_FUSE);
-        strncpy(entry->fuse_filename, filename, MAX_FUSE_FILENAME_STR_LEN);
-        entry->fuse_filename[MAX_FUSE_FILENAME_STR_LEN-1] = 0;
-        rc = update_cbm_filename_from_fuse(entry);
-        if (!rc)
-        {
-            DEBUG("Failed to convert fuse filename to CBM %d", rc);
-            goto EXIT;
-        }
-    }
+
+    // Similar to name, size differs depending on the source
+    // * For a SOURCE_CBM it's the number of CBM (256 byte) blocks
+    //   Size in stat is calculated (estimated) by multiplying the number
+    //   of full blocks with 256 bytes.  This is an over-estimate.  When
+    //   the file is read from disk, we will get an accurate figure and
+    //   update the filesize.  However, when a disk read happens again we
+    //   will update with an estimate - as we don't know if the accurate
+    //   figure is still valid
+    // * For a SOURCE_DUMMY file it's the size represented in the FUSE
+    //   filesystem, and can be a made up number (although that can confuse
+    //   FUSE if and when it tries to read the file)
+    // * For a SOURCE_FUSE file it's the size written by FUSE - i.e. its
+    //   actual size.  A SOURCE_FUSE file will be deleted once the file is
+    //   written to disk and then re-read as part of a directory listing
 
     // Sort out filesizes (and contents)
     if (source == SOURCE_CBM)
@@ -1061,7 +1162,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
     update_fuse_stat(entry);
 
     // Set the callbacks - may be NULL in which case that function won't be
-    // supported for this file
+    // supported for this file, and FUSE operations will be rejected
     memcpy(&(entry->cbs), cbs, sizeof(*cbs));
 
     rc = 0;
@@ -1070,16 +1171,15 @@ EXIT:
 
     if (entry == NULL)
     {
-        if (rc == 0)
-        {
-            rc = -1;
-        }
+        // If entry is NULL we must have hit an error
+        assert(rc);
     }
     else
     {
         if (rc != 0)
         {
-            // Free the entry again
+            // We hit an error after allocating a file entry - free it
+            DEBUG("Hit error processing entry - free it");
             free_file_entry(cbm, entry);
         }
     } 

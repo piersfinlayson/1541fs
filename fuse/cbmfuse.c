@@ -313,18 +313,18 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
         rc = -ENOENT;
         goto EXIT;
     }
-    if (strlen(path) > (MAX_FILENAME_LEN-1))
-    {
-        WARN("Request to open file with filename exceeding max length failed: %s", path);
-        rc = -ENAMETOOLONG;
-        goto EXIT;
-    }
 
     pthread_mutex_lock(&(cbm->mutex));
     locked = 1;
 
     // Get the file entry
     actual_path = path+1;
+    if (strlen(actual_path) >= MAX_FUSE_FILENAME_STR_LEN)
+    {
+        WARN("Request to open file with filename exceeding max length failed: %s", path);
+        rc = -ENAMETOOLONG;
+        goto EXIT;
+    }
     entry = find_fuse_file_entry(cbm, actual_path);
 
     if ((entry == NULL) && (!cbm->dir_is_clean))
