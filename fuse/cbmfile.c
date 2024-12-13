@@ -1284,6 +1284,11 @@ void log_file_entries(CBM *cbm)
     for (int ii = 0; ii < (int)(cbm->num_files); ii++)
     {
         e = cbm->files+ii;
+        // We cast st_blksize and st_nlink to size_t because on some systems,
+        // such as x64, they are 8 bytes, and on (RPi) ARM64, they are 4
+        // bytes.
+        // Some might say this is unhelpful.  Some might also say that having the ability for 2^64 block sizes, and nlinks is overkill,
+        // but hey, I just work here.
         DEBUG("File entry: Type %d CBM %s FUSE %s cbm_blocks %jd "
               "filesize %jd not_yet_on_disk %d channel 0x%p "
               "st_size %zu st_blocks %jd st_blksize %zu"
