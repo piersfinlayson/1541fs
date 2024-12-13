@@ -283,6 +283,7 @@ static int process_dir_listing(CBM *cbm, char *buffer, size_t data_len)
                     // we won't bother - instead we'll just add to the
                     // filename
                     suffix[suffix_len] = 0;
+                    suffix_ended = 1;
                 }
                 else if (suffix_len < 3)
                 {
