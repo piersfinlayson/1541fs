@@ -28,7 +28,7 @@ int check_drive_status_cmd(CBM *cbm, char *cmd)
         rc = cbm_exec_command(cbm->fd, cbm->device_num, cmd, 0);
         if (rc < 0)
         {
-            return -1;
+            return rc;
         }
     }
 
@@ -40,16 +40,23 @@ int check_drive_status_cmd(CBM *cbm, char *cmd)
     rc = cbm_talk(cbm->fd, cbm->device_num, 15);
     if (rc < 0)
     {
-        return -1;
+        return rc;
     }
+    DEBUG("Read");
     len = cbm_raw_read(cbm->fd, cbm->error_buffer, sizeof(cbm->error_buffer)-1);
+    DEBUG("Untalk");
     cbm_untalk(cbm->fd);
+    if (len < 0)
+    {
+        return rc;
+    }
+    assert(len < (int)sizeof(cbm->error_buffer));
 
-    // Belt and braces - ensure string properly NULL terminated
+    // Ensure string properly NULL terminated
     cbm->error_buffer[len] = 0;
     cbm->error_buffer[MAX_ERROR_LENGTH - 1] = 0;
 
-    DEBUG("Exiting check status: %s", cbm->error_buffer);
+    DEBUG("Exiting check status: %d %s", len, cbm->error_buffer);
 
     // Both 00,OK and 73,CBM ... are OK responses
     // Anything else is considered an error

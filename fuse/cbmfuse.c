@@ -4,29 +4,29 @@
 static void *cbm_init(struct fuse_conn_info *conn,
                       struct fuse_config *cfg)
 {
+    int rc;
+    int locked = 0;
+    int failed = 1;
+    CBM *cbm = fuse_get_context()->private_data;
     (void)conn;
     (void)cfg;
-    int failed = 0;
-    CBM *cbm = fuse_get_context()->private_data;
+
+    // Checks
     assert(cbm != NULL);
-    int rc;
 
     // Create the mutex
     DEBUG("Create mutex");
+    assert(!cbm->mutex_initialized);
     if (pthread_mutex_init(&(cbm->mutex), NULL) != 0)
     {
         ERROR("Failed to initialize mutex\n");
-        return NULL;
+        goto EXIT;
     }
-    else
-    {
-        cbm->mutex_initialized = 1;
-    }
+    cbm->mutex_initialized = 1;
 
     DEBUG("Open XUM1541 driver");
-    if (cbm_driver_open(&cbm->fd, 0) != 0) {
-        WARN("Failed to open OpenCBM driver\n");
-        failed = 1;
+    if (cbm_driver_open_ex(&cbm->fd, NULL) != 0) {
+        ERROR("Failed to open OpenCBM driver\n");
         goto EXIT;
     }
 
@@ -37,21 +37,21 @@ static void *cbm_init(struct fuse_conn_info *conn,
         if (rc)
         {
             ERROR("Failed to reset bus");
-            failed = 1;
             goto EXIT;
         }
     }
     
-    // We don't actually other to lock the mutex here, as no other functions
-    // will be called until this _init() function completes.
-    // pthread_mutex_lock(&(cbm->mutex));
+    // We don't actually need to lock the mutex here, as no other functions
+    // will be called until this _init() function completes. But, we'll do
+    // it anyway.
+    pthread_mutex_lock(&(cbm->mutex));
+    locked = 1;
+
     DEBUG("Check drive status");
     rc = check_drive_status_cmd(cbm, NULL);
-    // pthread_mutex_unlock(&(cbm->mutex));
     if (rc)
     {
-        WARN("Drive status query returned error: %s\n", cbm->error_buffer);
-        failed = 1;
+        ERROR("Drive status query returned error: %d %s\n", rc, cbm->error_buffer);
         goto EXIT;
     }
     
@@ -62,7 +62,6 @@ static void *cbm_init(struct fuse_conn_info *conn,
     if (rc)
     {
         ERROR("Failed to create dummy entries %d", rc);
-        failed = 1;
         goto EXIT;
     }
 
@@ -70,8 +69,15 @@ static void *cbm_init(struct fuse_conn_info *conn,
     // later
     DEBUG("Spawn thread to read dir");
     cbm_create_read_dir_thread(cbm);
+    failed = 0;
 
 EXIT:
+
+    if (cbm->mutex_initialized && locked)
+    {
+        pthread_mutex_unlock(&(cbm->mutex));
+        locked = 0;
+    }
 
     if (failed)
     {
@@ -83,9 +89,12 @@ EXIT:
         if (cbm->mutex_initialized)
         {
             pthread_mutex_destroy(&cbm->mutex);
+            cbm->mutex_initialized = 0;
         }
         ERROR("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?", cbm->device_num);
         printf("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?\n", cbm->device_num);
+        
+        // Cause FUSE to exit
         struct fuse *fuse = fuse_get_context()->fuse;
         assert(fuse != NULL);
         fuse_exit(fuse);

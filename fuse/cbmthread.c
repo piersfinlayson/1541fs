@@ -6,6 +6,8 @@ static void *read_dir_from_disk_thread_func(void *vargp)
 {
     CBM *cbm;
     int rc;
+
+    ENTRY();
     
     assert(vargp != NULL);
     cbm = (CBM *)vargp;
@@ -18,6 +20,8 @@ static void *read_dir_from_disk_thread_func(void *vargp)
     // Ignore the return code - there's nothing we can do here, and 
     // read_dir_from_disk logs any errors itself 
     (void)rc;
+
+    EXIT();
 
     return NULL;
 }
