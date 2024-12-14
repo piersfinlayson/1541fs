@@ -454,6 +454,7 @@ extern struct cbm_file *create_dummy_file_entry(CBM *cbm,
                                                 const off_t filesize,
                                                 struct callbacks *cbs,
                                                 int *error);
+extern void remove_file_entries_source(CBM *cbm, enum file_source source);
 extern int is_dummy_file(struct cbm_file *entry);
 #ifdef DEBUG_BUILD
 extern void log_file_entries(CBM *cbm);

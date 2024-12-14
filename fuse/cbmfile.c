@@ -383,11 +383,17 @@ int read_dir_from_disk(CBM *cbm)
 
     cbm->dir_is_clean = 0;
 
+    // Load the directory listing from the disk
     rc = load_dir_listing(cbm, &buf, &data_len);
     if (rc < 0)
     {
         goto EXIT;
     }
+
+    // As loading the directory listing succeeded, we can now delete any
+    // previous file entries with source SOURCE_CBM - as otherwise we'll end
+    // up with duplicates
+    remove_file_entries_source(cbm, SOURCE_CBM);
 
     rc = process_dir_listing(cbm, buf, data_len);
     free(buf);
@@ -1270,6 +1276,108 @@ int is_dummy_file(struct cbm_file *entry)
 
     return is_it;
 }
+
+// Remove all files associated with a particular source
+void remove_file_entries_source(CBM *cbm, enum file_source source)
+{
+    struct cbm_file *entry;
+    int ii;
+    int entry_freed;
+
+    ENTRY();
+    PARAMS("source %d", source);
+
+    assert(cbm != NULL);
+
+    DEBUG("Number of existing files: %zu", cbm->num_files);
+
+    // Note that as we may be freeing entries as we do, the num_files value
+    // will change, as will location of the remaining entries.  So, use a
+    // while loop and only increment ii if we don't free an entry.
+    ii = 0;
+    while (ii < (int)cbm->num_files)
+    {
+        entry_freed = 0;
+        entry = cbm->files + ii;
+        switch (source)
+        {
+            // SOURCE_CBM includes all files which were read from the media
+            // Files which came from FUSE were to be written to the disk
+            // Either they are already written to the disk - in which case
+            // the source changes to SOURCE_CBM, or they are not yet
+            // written to the disk, in which case they have the not_yet_on_disk
+            // flag set
+            case SOURCE_CBM:
+            case SOURCE_FUSE:
+                switch (entry->type)
+                {
+                    case CBM_PRG:
+                    case CBM_SEQ:
+                    case CBM_REL:
+                    case CBM_USR:
+                    case CBM_DISK_HDR:
+                        // Free if source was SOURCE_CBM
+                        // Or, if SOURCE_FUSE, free if not_yet_on_disk
+                        if ((source == SOURCE_CBM) ||
+                            (entry->not_yet_on_disk))
+                        {
+                            DEBUG("Free fuse filename: %s",
+                                  entry->fuse_filename);
+                            free_file_entry(cbm, entry);
+                            entry_freed = 1;
+                        } 
+                        else
+                        {
+                            DEBUG("Leave fuse filename: %s type: %d nyod: %d",
+                                    entry->fuse_filename,
+                                    entry->type,
+                                    entry->not_yet_on_disk);
+                        }
+                        break;
+
+                    default:
+                        DEBUG("Leave fuse filename: %s type: %d",
+                                entry->fuse_filename,
+                                entry->type);
+                        break;
+                }
+                break;
+
+            // All files which are dummies
+            case SOURCE_DUMMY:
+                switch (entry->type)
+                {
+                    case CBM_DUMMY_DIR:
+                    case CBM_DUMMY_FILE:
+                        DEBUG("Free fuse filename: %s",
+                                entry->fuse_filename);
+                        free_file_entry(cbm, entry);
+                        entry_freed = 1;
+                        break;
+
+                    default:
+                        DEBUG("Leave fuse filename: %s type: %d",
+                                entry->fuse_filename,
+                                entry->type);
+                        break;
+                }
+                break;
+
+            default:
+                assert(0);
+                break;
+        }
+        if (!entry_freed)
+        {
+            ii++;
+        }
+    }
+
+    EXIT();
+
+    return;
+}
+
 
 #ifdef DEBUG_BUILD
 // Make DEBUG logs, one for each cbm_file entry
