@@ -1294,7 +1294,7 @@ void log_file_entries(CBM *cbm)
         DEBUG("File entry: Type %d CBM %s FUSE %s cbm_blocks %jd "
               "filesize %jd not_yet_on_disk %d channel 0x%p "
               "st_size %zu st_blocks %jd st_blksize %zu"
-              " st_mode: 0%o, st_nlink: %zu", 
+              " st_mode: oct%o, st_nlink: %zu", 
               e->type,
               e->cbm_filename,
               e->fuse_filename,
