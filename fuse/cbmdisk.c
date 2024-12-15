@@ -7,6 +7,8 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
 {
     int rc = -1;
     int rc2;
+    int ch = -1;
+    int drive_open = 0;
 
     ENTRY();
     
@@ -82,7 +84,18 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
         // TO DO check 15 not open properly
         assert(!cbm->channel[15].open);
         DEBUG("Formatting disk with cmd: %s", cmd);
-        rc = cbm_open(cbm->fd, cbm->device_num, 15, NULL, 0);
+        ch = allocate_free_channel(cbm, USAGE_CONTROL, NULL);
+        if (ch < 0)
+        {
+            WARN("Failed to allocate CONTROL channel as it's already allocated");
+            rc = -EBUSY;
+            goto EXIT;
+        }
+        rc = cbm_open(cbm->fd, 
+                      cbm->device_num,
+                      (unsigned char)ch,
+                      NULL,
+                      0);
         if (rc)
         {
             rc2 = check_drive_status(cbm);
@@ -90,7 +103,7 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
             WARN("Failed to open command channel: %d %s", rc, cbm->error_buffer);
             goto EXIT;
         }
-        cbm_listen(cbm->fd, cbm->device_num, 15);
+        cbm_listen(cbm->fd, cbm->device_num, (unsigned char)ch);
         rc = cbm_raw_write(cbm->fd, cmd, strlen(cmd));
         cbm_unlisten(cbm->fd);
 
@@ -116,6 +129,17 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
     rc = (int)size;
 
 EXIT:
+
+    if (drive_open)
+    {
+        assert(ch >= 0);
+        cbm_close(cbm->fd, cbm->device_num, (unsigned char)ch);
+    }
+
+    if (ch >= 0)
+    {
+        release_channel(cbm, ch);
+    }
 
     EXIT();
 
@@ -260,7 +284,9 @@ static int release_file_on_disk(CBM *cbm,
     assert(entry->channel->num < MAX_CHANNEL);
 
     // Attempt to close the channel
-    rc = cbm_close(cbm->fd, cbm->device_num, (unsigned char)entry->channel->num);
+    rc = cbm_close(cbm->fd,
+                   cbm->device_num,
+                   (unsigned char)entry->channel->num);
     if (rc)
     {
         rc2 = check_drive_status(cbm);

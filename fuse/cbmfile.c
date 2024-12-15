@@ -55,6 +55,7 @@ static int load_dir_listing(CBM *cbm, char **buf, size_t *data_len)
     size_t pos;
     char c;
     int drive_open = 0;
+    int ch = -1;
 
     ENTRY();
 
@@ -71,13 +72,22 @@ static int load_dir_listing(CBM *cbm, char **buf, size_t *data_len)
     }
     assert(buf_len > 0);
 
+    ch = allocate_free_channel(cbm, USAGE_WRITE, NULL);
+    if (ch < 0)
+    {
+        WARN("Failed to get WRITE channel as it's already allocated");
+        rc = -EBUSY;
+        goto EXIT;
+    }
+    assert(ch == WRITE_CHANNEL);
+
     // Open the directory "file" ($)
     // This needs to be done using the READ_CHANNEL (channel 1)
     // Otherwise the files are not listed - only the header and footer
     // (showing blocks free) will be listed
     DEBUG("Open $");
     c = cbm_ascii2petscii_c('$');
-    rc = cbm_open(cbm->fd, cbm->device_num, 0, &c, READ_CHANNEL);
+    rc = cbm_open(cbm->fd, cbm->device_num, (unsigned char)ch, &c, 1);
     if (rc)
     {
         rc2 = check_drive_status(cbm);
@@ -86,7 +96,7 @@ static int load_dir_listing(CBM *cbm, char **buf, size_t *data_len)
         goto EXIT;
     }
     drive_open = 1;
-    cbm_talk(cbm->fd, cbm->device_num, 0);
+    cbm_talk(cbm->fd, cbm->device_num, (unsigned char)ch);
 
     // Read in directory listing from the drive
     DEBUG("Read in directory data");
@@ -123,7 +133,12 @@ EXIT:
 
     if (drive_open)
     {
-        cbm_close(cbm->fd, cbm->device_num, 0);
+        cbm_close(cbm->fd, cbm->device_num, (unsigned char)ch);
+    }
+
+    if (ch >= 0)
+    {
+        release_channel(cbm, ch);
     }
 
     if (rc)

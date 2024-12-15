@@ -98,6 +98,7 @@ extern int current_log_level;
 #define READ_CHANNEL      1
 #define MIN_USER_CHANNEL  2
 #define MAX_USER_CHANNEL  14
+#define CTRL_CHANNEL      15
 #define DUMMY_CHANNEL     16  // Used to access dummy files/directories
 #define MIN_CHANNEL       0
 #define MAX_CHANNEL       DUMMY_CHANNEL

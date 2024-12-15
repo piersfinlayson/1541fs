@@ -1,6 +1,9 @@
 #include "cbmfuse.h"
 
 // Allocate a free CBM channel, based on the required usage and free channels
+// entry may be NULL, in which case the channel _must_ be allocated and then
+// released within a single FUSE callback (as the file entry is the only way
+// to keep track of channels across FUSE callbacks
 int allocate_free_channel(CBM *cbm,
                           enum cbm_channel_usage usage,
                           struct cbm_file *entry)
@@ -12,24 +15,23 @@ int allocate_free_channel(CBM *cbm,
 
     assert(cbm != NULL);
     assert(usage != USAGE_NONE);
-    assert(entry != NULL);
 
     // Figure out valid channels based on usage
     switch (usage)
     {
         case USAGE_READ:
-            min = 0;
-            max = 0;
+            min = READ_CHANNEL;
+            max = READ_CHANNEL;
             break;
 
         case USAGE_WRITE:
-            min = 1;
-            max = 1;
+            min = WRITE_CHANNEL;
+            max = WRITE_CHANNEL;
             break;
 
         case USAGE_CONTROL:
-            min = 15;
-            max = 15;
+            min = CTRL_CHANNEL;
+            max = CTRL_CHANNEL;
             break;
 
         case USAGE_OPEN:
@@ -45,7 +47,7 @@ int allocate_free_channel(CBM *cbm,
 
     assert((min >= 0) && (min < NUM_CHANNELS));
     assert((max >= 0) && (max < NUM_CHANNELS));
-    assert(min < max);
+    assert(min <= max);
 
     // Find a free channel
     for (ch = min; ch <= max; ch++)
@@ -58,8 +60,11 @@ int allocate_free_channel(CBM *cbm,
             cbm->channel[ch].open = 1;
             cbm->channel[ch].usage = usage;
             cbm->channel[ch].file = entry;
-            assert(entry->channel == NULL);
-            entry->channel = &(cbm->channel[ch]);
+            if (entry != NULL)
+            {
+                assert(entry->channel == NULL);
+                entry->channel = &(cbm->channel[ch]);
+            }
             break;
         }
     }
@@ -81,32 +86,39 @@ EXIT:
 // (these aren't "allocated" in the first place)
 void release_channel(CBM *cbm, int ch)
 {
+    struct cbm_channel *channel;
+
     ENTRY();
 
     assert(cbm != NULL);
     assert((ch >= 0) && (ch < NUM_CHANNELS));
 
-    assert(cbm->channel[ch].num == ch);
-    assert(cbm->channel[ch].open);
-    assert(cbm->channel[ch].file != NULL);
-    assert(cbm->channel[ch].file->channel == &(cbm->channel[ch]));
+    channel = cbm->channel + ch;
 
-    // Clear up the file entry
-    cbm->channel[ch].file->channel = NULL;
-    cbm->channel[ch].file = NULL;
+    assert(channel->num == ch);
+    assert(channel->open);
+    if (channel->file != NULL)
+    {
+        // Clear up the file entry
+        assert(channel->file->channel == &(cbm->channel[ch]));
+        channel->file->channel = NULL;
+        channel->file = NULL;
+    }
     
     // Check that any handles were cleared (because caller should have)
     // freed any allocated memory stored in them, etc
-    assert(cbm->channel[ch].handle1 == NULL);
-    assert(cbm->channel[ch].handle2 == 0);
+    assert(channel->handle1 == NULL);
+    assert(channel->handle2 == 0);
 
     // Now memset this to 0 (yes, we explicitly set a bunch of stuff above
     // to zero but that was belt and braces, and this clears the rest)
-    memset(&(cbm->channel[ch]), 0, sizeof(struct cbm_channel));
-    cbm->channel[ch].num = (unsigned char)ch;
+    memset(channel, 0, sizeof(struct cbm_channel));
+    channel->num = (unsigned char)ch;
 
-    assert(cbm->channel[ch].num == ch);
-    assert(!cbm->channel[ch].open);
+    assert(channel->num == ch);
+    assert(!channel->open);
 
     EXIT();
+
+    return;
 }
