@@ -7,6 +7,7 @@ static struct options
     int show_version;
     int force_bus_reset;
     int dummy_formats;
+    int daemonize;
     char *mountpoint;
 } options;
 
@@ -24,7 +25,10 @@ static const struct fuse_opt option_spec[] = {
     OPTION("--bus-reset", force_bus_reset),
     OPTION("-u", dummy_formats),
     OPTION("--dummy-formats", dummy_formats),
-    FUSE_OPT_KEY("-f", FUSE_OPT_KEY_KEEP),
+    OPTION("--daemonize", daemonize),
+    OPTION("--daemonise", daemonize),
+    OPTION("--daemon", daemonize),
+    OPTION("-z", daemonize),
     FUSE_OPT_END
 };
 
@@ -54,6 +58,80 @@ static int opt_proc(void *data,
     }
 
     return 1;
+}
+
+int handle_mountpoint(CBM *cbm, const char *mountpoint)
+{
+    int rc = -1;
+
+    ENTRY();
+
+    if (mountpoint == NULL)
+    {
+        ERROR("No mountpint defined - exiting");
+        printf("No mountpoint defined - exiting\n");
+        goto EXIT;
+    }
+    if (mountpoint[0] == '/')
+    {
+        // Absolute path
+        cbm->mountpoint = strdup(mountpoint);
+        if (cbm->mountpoint == NULL)
+        {
+            ERROR("Couldn't get memory to store mountpoint %s",
+                  mountpoint);
+            goto EXIT;
+        }
+    }
+    else 
+    {
+        // Relative path
+
+        // Get path we were executed from
+        char path[PATH_MAX];
+        ssize_t rl_len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+        if (rl_len == -1)
+        {
+            ERROR("Can't get current path, to contruct mountpoint");
+            printf("Error getting current path - exiting\n");
+            goto EXIT;
+        }
+        path[rl_len] = '\0';
+        assert(rl_len > 0);
+        assert(rl_len < (PATH_MAX-1));
+        char *last_slash = strrchr(path, '/');
+        if (last_slash != NULL)
+        {
+            // Truncate the string at the last '/' to strip the executable
+            // name
+            *(last_slash+1) = '\0';
+        }
+        DEBUG("Executed from path %s", path);
+
+        size_t len = strlen(path);
+        size_t len_left = PATH_MAX-len-1;
+        assert(len_left > strlen(mountpoint));
+        off_t offset = 0;
+        if ((strlen(mountpoint) >= 2) && 
+            (mountpoint[0] == '.') && 
+            (mountpoint[1] == '/'))
+        {
+            // If the mountpoint started with ./ strip it, because it's not
+            // needed
+            offset = 2;
+        }
+        strncat(path, mountpoint+offset, len_left);
+        cbm->mountpoint = strdup(path);
+        DEBUG("Mountpoint: %s", cbm->mountpoint);
+    }
+
+    rc = 0;
+
+EXIT:
+
+    EXIT();
+
+    return rc;
 }
 
 // Main arg processing, called by main()
@@ -99,21 +177,26 @@ int process_args(struct fuse_args *args, CBM *cbm)
         printf("    -d|--device <device_num=8|9|10|11>  set device number (default: 8)\n");
         printf("    -b|--bus-reset         force a bus (IEC/IEEE-488) reset before mount\n");
         printf("    -u|--dummy-formats     don't actually format the disk if requested\n");
+        printf("    -z|--daemonize         daemonize (after initialization has completed)");
         printf("    -?|-h|--help           show help\n");
         printf("    --version              show version\n");
         fuse_lib_help(args);
         ret = -1;
         goto EXIT;
     }
-    if (options.mountpoint == NULL)
+
+    ret = handle_mountpoint(cbm, options.mountpoint);
+    free(options.mountpoint);
+    if (ret)
     {
-        WARN("No mountpint defined - exiting");
-        printf("No mountpoint defined - exiting\n");
         goto EXIT;
     }
-    cbm->mountpoint = options.mountpoint;
+
+    printf("Mountpoint: %s\n", cbm->mountpoint);
+
     cbm->force_bus_reset = options.force_bus_reset;
     cbm->dummy_formats = options.dummy_formats;
+    cbm->daemonize = options.daemonize;
     if (options.device_num == NULL)
     {
         cbm->device_num = DEFAULT_DEVICE_NUM;

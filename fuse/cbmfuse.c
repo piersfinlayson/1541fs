@@ -1,15 +1,16 @@
 #include "cbmfuse.h"
 
-// Updated init function signature for FUSE3
-static void *cbm_init(struct fuse_conn_info *conn,
-                      struct fuse_config *cfg)
+// Called from main, before fuse_loop, in order to pre-initialize various
+// OpenCBM stuff
+// This allows us to ensure that things are unlikely to fail after the
+// the process is daemonized should it be)
+// Returns 0 on success, errno on failure
+int cbm_pre_init(CBM *cbm)
 {
-    int rc;
+    int rc = -1;
     int locked = 0;
-    int failed = 1;
-    CBM *cbm = fuse_get_context()->private_data;
-    (void)conn;
-    (void)cfg;
+
+    ENTRY();
 
     // Checks
     assert(cbm != NULL);
@@ -17,19 +18,25 @@ static void *cbm_init(struct fuse_conn_info *conn,
     // Create the mutex
     DEBUG("Create mutex");
     assert(!cbm->mutex_initialized);
-    if (pthread_mutex_init(&(cbm->mutex), NULL) != 0)
+    rc = pthread_mutex_init(&(cbm->mutex), NULL); 
+    if (rc)
     {
-        ERROR("Failed to initialize mutex\n");
+        ERROR("Failed to initialize mutex");
         goto EXIT;
     }
     cbm->mutex_initialized = 1;
 
+    // Open the OpenCBM driver
+    assert(cbm->fd == (CBM_FILE)0);
     DEBUG("Open XUM1541 driver");
-    if (cbm_driver_open_ex(&cbm->fd, NULL) != 0) {
-        ERROR("Failed to open OpenCBM driver\n");
+    rc = cbm_driver_open_ex(&cbm->fd, NULL);
+    if (rc)
+    {
+        ERROR("Failed to open OpenCBM driver");
         goto EXIT;
     }
 
+    // Force a bus reset - if we've been told to
     if (cbm->force_bus_reset)
     {
         INFO("Performing bus reset");
@@ -40,7 +47,7 @@ static void *cbm_init(struct fuse_conn_info *conn,
             goto EXIT;
         }
     }
-    
+
     // We don't actually need to lock the mutex here, as no other functions
     // will be called until this _init() function completes. But, we'll do
     // it anyway.
@@ -51,10 +58,9 @@ static void *cbm_init(struct fuse_conn_info *conn,
     rc = check_drive_status_cmd(cbm, NULL);
     if (rc)
     {
-        ERROR("Drive status query returned error: %d %s\n", rc, cbm->error_buffer);
+        ERROR("Drive status query returned error: %d %s", rc, cbm->error_buffer);
         goto EXIT;
     }
-    
     cbm->is_initialized = 1;
 
     // Create dummy file entries
@@ -65,12 +71,6 @@ static void *cbm_init(struct fuse_conn_info *conn,
         goto EXIT;
     }
 
-    // Spawn a thread to read the disk, so it's faster to access this mount
-    // later
-    DEBUG("Spawn thread to read dir");
-    cbm_create_read_dir_thread(cbm);
-    failed = 0;
-
 EXIT:
 
     if (cbm->mutex_initialized && locked)
@@ -79,8 +79,9 @@ EXIT:
         locked = 0;
     }
 
-    if (failed)
+    if (rc)
     {
+        cbm->is_initialized = 0;
         if (cbm->fd != (CBM_FILE)0)
         {
             cbm_driver_close(cbm->fd);
@@ -91,16 +92,45 @@ EXIT:
             pthread_mutex_destroy(&cbm->mutex);
             cbm->mutex_initialized = 0;
         }
-        ERROR("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?", cbm->device_num);
-        printf("Mount failed - is the XUM1541 plugged in, the drive turned on and set to device %d?\n", cbm->device_num);
+        ERROR("Initialization failed - is the XUM1541 plugged in, the drive turned on and set to device %d?", cbm->device_num);
+        printf("Initialization failed - is the XUM1541 plugged in, the drive turned on and set to device %d?\n", cbm->device_num);
         
         // Cause FUSE to exit
         struct fuse *fuse = fuse_get_context()->fuse;
         assert(fuse != NULL);
         fuse_exit(fuse);
-        cbm->fuse_exited = 1;
+        // cbm->fuse_exited = 1;
         cbm = NULL;
     }
+
+    EXIT();
+
+    return rc;
+}
+
+// Updated init function signature for FUSE3
+static void *cbm_init(struct fuse_conn_info *conn,
+                      struct fuse_config *cfg)
+{
+    CBM *cbm = fuse_get_context()->private_data;
+    (void)conn;
+    (void)cfg;
+
+    ENTRY();
+
+    assert(cbm->mutex_initialized);
+    assert(cbm->fd != 0);
+    assert(cbm->is_initialized);
+
+    // Spawn a thread to read the disk, so it's faster to access this mount
+    // later
+    // We do this here, as we've now daemonized.  If we ran this before
+    // daemonizing the parent of this thread would exist, so this child
+    // thread would too.
+    DEBUG("Spawn thread to read dir");
+    cbm_create_read_dir_thread(cbm);
+
+    EXIT();
 
     return cbm;
 }
@@ -109,8 +139,11 @@ EXIT:
 // Not a static, as also called directly by main
 void cbm_destroy(void *private_data)
 {
+    int rc;
     CBM *cbm = private_data;
     assert(cbm != NULL);
+
+    ENTRY();
 
     for (int ii = 0; ii < NUM_CHANNELS; ii++)
     {
@@ -125,19 +158,34 @@ void cbm_destroy(void *private_data)
     if (cbm->is_initialized)
     {
         // Clear pending errors
+        DEBUG("Check drive status - to clear any pending errors");
         check_drive_status(cbm);
         cbm->is_initialized = 0;
     }
     if (cbm->fd != (CBM_FILE)0)
     {
+        DEBUG("Close OpenCBM driver");
         cbm_driver_close(cbm->fd);
         cbm->fd = (CBM_FILE)0;
     }
     if (cbm->mutex_initialized)
     {
+        // Check mutex is unlocked before destroying
+        DEBUG("Destroy mutex");
+        rc = pthread_mutex_trylock(&(cbm->mutex));
+        if (rc)
+        {
+            assert(rc == -EBUSY);
+            DEBUG("Mutex was locked");
+        }
+        pthread_mutex_unlock(&(cbm->mutex));
         pthread_mutex_destroy(&(cbm->mutex));
         cbm->mutex_initialized = 0;
     }
+
+    EXIT();
+
+    return;
 }
 
 // REWORK for cbm_file

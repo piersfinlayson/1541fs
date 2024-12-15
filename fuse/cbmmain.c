@@ -31,6 +31,8 @@ void destroy_private_data(CBM *cbm, int clean)
 {
     ENTRY();
 
+    assert(cbm != NULL);
+
     // handle_signal() doesn't want to attempt a clean shutdown as it may fail
     // and hang
     if (clean)
@@ -39,6 +41,10 @@ void destroy_private_data(CBM *cbm, int clean)
     }
     destroy_args(cbm);
     destroy_files(cbm);
+    if (cbm->mountpoint != NULL)
+    {
+        free(cbm->mountpoint);
+    }
     free(cbm);
 
     EXIT();
@@ -68,6 +74,35 @@ static void cleanup_fuse(CBM *cbm)
     EXIT();
 }
 
+// Run fuse_loop in a separate thread to keep main thread clear for signal
+// handling
+static pthread_t fuse_thread;
+static void *fuse_thread_func(void *arg)
+{
+    int rc;
+    CBM *cbm = (CBM *)arg;
+
+    ENTRY();
+
+    assert(cbm != NULL);
+    assert(!cbm->fuse_loop);
+    assert(!cbm->fuse_exited);
+    cbm->fuse_loop = 1;
+    rc = fuse_loop(cbm->fuse);
+    DEBUG("FUSE loop exited");
+    (void)rc;
+    cbm->fuse_exited = 1;
+
+    EXIT();
+
+    return NULL;
+}
+
+int kill_fuse_thread(void)
+{
+    return pthread_cancel(fuse_thread);
+}
+
 int main(int argc, char *argv[])
 {
     CBM *cbm;
@@ -80,7 +115,7 @@ int main(int argc, char *argv[])
     cbm = malloc(sizeof(struct cbm_state));
     if (cbm == NULL)
     {
-        ERROR("Failed to allocate memory\n");
+        ERROR("Failed to allocate memory");
         goto EXIT;
     }
     cbm = allocate_private_data();
@@ -90,7 +125,11 @@ int main(int argc, char *argv[])
     // Set up next, before anything else happens, so we can gracefully handle
     // signals
     DEBUG("Setup signal handler");
-    setup_signal_handler(cbm);
+    if(setup_signal_handler(cbm))
+    {
+        ERROR("Failed to set up signal handle");
+        goto EXIT;
+    }
 
     // Process command line args
     DEBUG("Init fuse arg");
@@ -116,8 +155,41 @@ int main(int argc, char *argv[])
                             cbm);
     if (cbm->fuse == NULL)
     {
-        ERROR("Failed to create FUSE object\n");
+        ERROR("Failed to create FUSE object");
         goto EXIT;
+    }
+
+    // Mount our mountpoint.  Note that this doesn't actually call our _init()
+    // function - that only happens when fuse_loop() is called below.
+    DEBUG("Fuse mount");
+    cbm->fuse_fh = fuse_mount(cbm->fuse, cbm->mountpoint);
+    if (cbm->fuse_fh == -1)
+    {
+        ERROR("Failed to mount FUSE filesystem");
+        goto EXIT;
+    }
+
+    // Do pre-initialization.  This ensure as much as possible is working
+    // before daemonization.
+    if(cbm_pre_init(cbm))
+    {
+        ERROR("Pre-initialization failed - exiting");
+        goto EXIT;
+    }
+
+    if (cbm->daemonize)
+    {
+        // nochdir can be 0 to change directory to root - as we've mounted
+        // from the relative mountpoint now.
+        DEBUG("Run as daemon");
+        if (daemon(0,0))
+        {
+            ERROR("Failed to daemonize - exiting");
+            printf("Failed to daemonize - exiting");
+            goto EXIT;
+        }
+        cbm->is_daemon = 1;
+
     }
 
     // Attempt the mount - this will call our _init() function, which in turn
@@ -127,19 +199,12 @@ int main(int argc, char *argv[])
     // Any failure in _init() will cause fuse_exit() to be called.  That will
     // in turn cause the fuse_loop below to exit, meaning we can clean up and
     // exit.
-    DEBUG("Fuse mount");
-    cbm->fuse_fh = fuse_mount(cbm->fuse, cbm->mountpoint);
-    if (cbm->fuse_fh == -1)
-    {
-        ERROR("Failed to mount FUSE filesystem\n");
-        goto EXIT;
-    }
 
     // Start the main fuse_loop and run forever - or until we hit a fatal
     // or catch and handle a signal
     DEBUG("Fuse loop");
-    cbm->fuse_loop = 1;
-    ret = fuse_loop(cbm->fuse);
+    pthread_create(&fuse_thread, NULL, fuse_thread_func, cbm);
+    pthread_join(fuse_thread, NULL); // Wait for thread we just started to exit
     cbm->fuse_exited = 1;
 
 EXIT:

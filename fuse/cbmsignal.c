@@ -41,28 +41,70 @@ static void handle_signal(int signal)
                 {
                     if (cbm->fuse_loop && !cbm->fuse_exited)
                     {
-                        fuse_exit(cbm->fuse);
-                        cbm->fuse_exited = 1;
-                    }
-                    if (cbm->fuse_fh != -1)
-                    {
+                        // To exit FUSE we need to call fuse_exit() AND
+                        // fuse_session_exit()
+                        DEBUG("Fuse unmount");
                         fuse_unmount(cbm->fuse);
-                        cbm->fuse_fh = -1;
+                        DEBUG("Fuse unmounted");
+                        DEBUG("Exit FUSE");
+                        fuse_exit(cbm->fuse);
+                        struct fuse_session *se = fuse_get_session(cbm->fuse);
+                        if (se)
+                        {
+                            DEBUG("Exit FUSE session");
+                            fuse_session_exit(se);
+                        }
+
+                        // We now need open a file on our mountpoint in order
+                        // kick FUSE into doing something - as for some reason
+                        // the signal we received doesn't cause the system
+                        // call FUSE is blocked in to exit.
+                        FILE *file = fopen(cbm->mountpoint, "r");
+                        if (file == NULL)
+                        {
+                            ERROR("Error opening file to kick FUSE to close - mountpoint may be left mounted");
+                        }
+                        else
+                        {
+                            fclose(file);
+                            DEBUG("FUSE kicked by opening and closing mountpoint")
+                        }
+                        // Now allow fuse_loop() within main() will exit, and
+                        // main() will then do remaining cleanup
                     }
-                    fuse_destroy(cbm->fuse);
-                    cbm->fuse = NULL;
+                    else
+                    {
+                        // It doesn't seem like FUSE was running, so we
+                        // can't just terminate it and wait for it to 
+                        // finish and main to cleanup.
+                        // So we need to force an exit
+                        WARN("Unclean exit from signal handler - no fuse_loop");
+                        exit(1);
+                    }
                 }
-                destroy_private_data(cbm, 0);
-                cbm = NULL;
+                else
+                {
+                    // It doesn't seem like FUSE was running, so we
+                    // can't just terminate it and wait for it to 
+                    // finish and main to cleanup.
+                    // So we need to force an exit
+                    WARN("Unclean exit from signal handler - no FUSE");
+                    exit(1);
+                }
             }
-            INFO("Exiting after handling signal");
-            exit(1);
             break;
     }
+
+    DEBUG("Exiting signal handler");
+
+    return;
 }
 
-void setup_signal_handler(CBM *cbm)
+int setup_signal_handler(CBM *cbm)
 {
+    int rc = -1;
+    struct sigaction sa;
+
     int termination_signals[] = {
         SIGHUP,   // Hangup detected on controlling terminal or death of controlling process
         SIGINT,   // Interrupt from keyboard (Ctrl-C)
@@ -70,7 +112,6 @@ void setup_signal_handler(CBM *cbm)
         SIGILL,   // Illegal Instruction
         SIGABRT,  // Abort signal from abort function
         SIGFPE,   // Floating-point exception
-        SIGKILL,  // Kill signal (cannot be caught, blocked, or ignored)
         SIGSEGV,  // Invalid memory reference (segmentation fault)
         SIGPIPE,  // Broken pipe: write to a pipe with no readers
         SIGALRM,  // Timer signal from alarm
@@ -90,11 +131,26 @@ void setup_signal_handler(CBM *cbm)
     assert(cbm != NULL);
     shd.cbm = cbm;
 
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
     for (int ii = 0; ii < num_signals; ii++)
     {
-        signal(termination_signals[ii], handle_signal);
+        if (sigaction(termination_signals[ii], &sa, NULL) != 0)
+        {
+            ERROR("Failed to set signal handler for signal %d",
+                  termination_signals[ii]);
+            goto EXIT;
+        }
     }
 
+    rc = 0;
+
+EXIT:
+
+    return rc;
 }
 
 void cleanup_signal_handler()

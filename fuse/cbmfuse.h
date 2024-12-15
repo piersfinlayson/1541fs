@@ -1,5 +1,6 @@
 #define FUSE_USE_VERSION 30
 #define _FILE_OFFSET_BITS 64
+#define _DEFAULT_SOURCE // include daemon() 
 
 #define APP_NAME "1541fs-fuse"
 #ifndef VERSION
@@ -22,6 +23,7 @@
 #include <syslog.h>
 #include <signal.h>
 #include <time.h>
+#include <limits.h>
 #include <opencbm.h>
 
 extern int current_log_level;
@@ -319,6 +321,12 @@ typedef struct cbm_state
     // Path to mount CBM FUSE FS
     char *mountpoint;
 
+    // Whether to daemonize after initialization
+    int daemonize;
+
+    // Whether is now running as a daemon
+    int is_daemon;
+
     // Boolean indicating whether to force a bus (IEC/IEEE-488) reset before
     // attempting to mount
     int force_bus_reset;
@@ -461,6 +469,7 @@ extern void log_file_entries(CBM *cbm);
 #endif // DEBUG_BUILD
 
 // cbmfuse.c
+extern int cbm_pre_init(CBM *cbm);
 extern void cbm_destroy(void *private_data);
 extern const struct fuse_operations cbm_operations;
 
@@ -469,9 +478,10 @@ extern void init_logging();
 
 // cbmmain.c
 extern void destroy_private_data(CBM *cbm, int clean);
+int kill_fuse_thread(void);
 
 // cbmsignal.c
-extern void setup_signal_handler(CBM *cbm);
+extern int setup_signal_handler(CBM *cbm);
 extern void cleanup_signal_handler();
 
 // cbmstatus.c
