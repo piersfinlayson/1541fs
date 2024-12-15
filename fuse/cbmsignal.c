@@ -6,6 +6,7 @@
 // get using fuse_get_context()->private_data.
 struct signal_handler_data {
     CBM *cbm;
+    int attempts;
 };
 
 static struct signal_handler_data shd; 
@@ -18,6 +19,15 @@ static void handle_signal(int signal)
     // mutex.  But we can't help that, as a signal could be caught and handled
     // while the lock is held.
     CBM *cbm = shd.cbm;
+    shd.attempts++;
+    
+    if (shd.attempts > 1)
+    {
+        ERROR("Second time in the signal handler exit immediately");
+        printf("Failed to handle signal cleanly - we may have left resources open.\n");
+        printf("You may need to manually unmount your filesystem and reset the USB driver.\n");
+        exit(1);
+    }
 
     // Try and unmount and destroy fuse
     // We won't bother to get the mutex, because it may well be locked already
@@ -130,6 +140,7 @@ int setup_signal_handler(CBM *cbm)
 
     assert(cbm != NULL);
     shd.cbm = cbm;
+    shd.attempts = 0;
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handle_signal;
