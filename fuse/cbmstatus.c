@@ -13,9 +13,9 @@ int check_drive_status_cmd(CBM *cbm, char *cmd)
     int rc;
     int len;
 
-    // We don't currently support users holding channel 15 open - we'll be
-    // done with it before we return
-    assert(!cbm->channel[15].open);
+    // Channel 15 will already be open if something was using it
+    // It will call this function if it hits an error.  Therefore we're
+    // going to use channel 15 without explicitly allocating it
 
     // Send the command first, if so requested.
     if (cmd != NULL)
