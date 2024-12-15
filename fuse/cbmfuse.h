@@ -94,11 +94,11 @@ extern int current_log_level;
 // 15 - control channel (send commands, or receive status)
 //2-14 inclusive can be used for other purposes.
 #define NUM_CHANNELS      16
-#define WRITE_CHANNEL     0
-#define READ_CHANNEL      1
+#define LOAD_CHANNEL     0
+#define SAVE_CHANNEL      1
 #define MIN_USER_CHANNEL  2
 #define MAX_USER_CHANNEL  14
-#define CTRL_CHANNEL      15
+#define COMMAND_CHANNEL      15
 #define DUMMY_CHANNEL     16  // Used to access dummy files/directories
 #define MIN_CHANNEL       0
 #define MAX_CHANNEL       DUMMY_CHANNEL
@@ -129,13 +129,13 @@ enum cbm_channel_usage
     USAGE_NONE,
 
     // Reserved for channel 0
-    USAGE_READ,
+    USAGE_LOAD,
 
     // Reserved for channel 1
-    USAGE_WRITE,
+    USAGE_SAVE,
 
     // Used by channel 15
-    USAGE_CONTROL,
+    USAGE_COMMAND,
 
     // Used by other channels (specifically as requested by FUSE)
     USAGE_OPEN,

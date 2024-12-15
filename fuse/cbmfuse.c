@@ -93,7 +93,10 @@ EXIT:
             cbm->mutex_initialized = 0;
         }
         ERROR("Initialization failed - is the XUM1541 plugged in, the drive turned on and set to device %d?", cbm->device_num);
-        printf("Initialization failed - is the XUM1541 plugged in, the drive turned on and set to device %d?\n", cbm->device_num);
+        printf("Initialization failed.  Check:\n"
+               "* is the XUM1541 plugged in\n"
+               "* is the drive turned on\n"
+               "* is the drive set to device %d?\n", cbm->device_num);
         
         // Cause FUSE to exit
         struct fuse *fuse = fuse_get_context()->fuse;
@@ -223,8 +226,8 @@ static int cbm_getattr(const char *path,
     else if (strcmp(path, "/") && (path[0] == '/'))
     {
         // Skip the initial
-        DEBUG("Make path %s", actual_path);
         actual_path = path+1;
+        DEBUG("Make path %s", actual_path);
     }
     else
     {
@@ -343,7 +346,7 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
     CBM *cbm = fuse_get_context()->private_data;
 
     ENTRY();
-    PARAMS("Path %s", path);
+    PARAMS("Path %s, flags 0x%x", path, fi->flags);
 
     // Processing:
     // * Check some assumptions
@@ -357,6 +360,20 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
 
     assert(cbm != NULL);
     assert(fi != NULL);
+
+    if (((fi->flags & O_ACCMODE) != O_RDONLY) &&
+        ((fi->flags & O_ACCMODE) != O_WRONLY))
+    {
+        DEBUG("Unsupported open flags 0%x", fi->flags);
+        rc = -ENOTSUP;
+        goto EXIT;
+    }
+    if (fi->flags & (O_NOCTTY | O_NONBLOCK))
+    {
+        DEBUG("Unsupported NOCTTY and/or NONBLOCK on open 0x%x", fi->flags);
+        rc = -ENOTSUP;
+        goto EXIT;
+    }
 
     if (path[0] == 0)
     {
@@ -400,12 +417,14 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
 
     // It's OK if we didn't find a file - we will create it
     // This would be the case where we wanted to write a new file, for example
+    // We will pass in the disk_cbs (callbacks) as we want the write to call
+    // the disk write callback
     if (entry == NULL)
     {
         entry = create_fuse_file_entry(cbm,
                                        actual_path,
                                        0,
-                                       NULL,
+                                       &disk_cbs,
                                        &rc);
         if (entry == NULL)
         {
@@ -415,6 +434,8 @@ static int cbm_fuseopen(const char *path, struct fuse_file_info *fi)
                  rc);
             goto EXIT;
         }
+        DEBUG("Created file entry for FUSE filename %s",
+              entry->fuse_filename);
         entry->not_yet_on_disk = 1;
     }
     assert(entry != NULL);
@@ -734,33 +755,91 @@ EXIT:
 static int cbm_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     int rc = -1;
+    const char *actual_path;
+    struct cbm_file *entry;
     (void)fi;
     (void)mode;  // We can avoid mode, because we don't bother with file permissions
 
     ENTRY();
-    PARAMS("path %s", path);
+    PARAMS("path %s, mode 0x%x", path, mode);
 
     CBM *cbm = fuse_get_context()->private_data;
     assert(cbm != NULL);
     assert(fi != NULL);
 
-    // DO NOT LOCK - cbm_fuseopen will
+    // Check the mode
+    if (!S_ISREG(mode))
+    {
+        WARN("Kernel requested to create unsupported file type 0x%x", mode);
+        rc = -ENOTSUP;
+        goto EXIT;
+    }
+
+    // We ignore permissions - we'll just silently do whatever we want
+
+    // Check the flags
+    // The FUSE documentationd doesn't say these are provided by they appear
+    // to be
+    if (!(fi->flags & O_CREAT))
+    {
+        WARN("Kernel requsted to create file with unsupported open flags 0x%x",
+             fi->flags);
+        rc = -ENOTSUP;
+        goto EXIT;
+    }
+
+    // Now check whether this file already exists
+    if (path[0] == '/')
+    {
+        switch (strnlen(path, 2))
+        {
+            case 0:
+                WARN("Kernel requested to create zero length filename - refusing");
+                rc = -EPROTO;
+                goto EXIT;
+                break;
+
+            case 1:
+                WARN("Kernel requested to create / - refusing");
+                rc = -EROFS;
+                goto EXIT;
+                break;
+
+            default:
+                actual_path = path+1;
+                break;
+        }
+    }
+    else
+    {
+        actual_path = path;
+    }
+    (void)actual_path; // We may use this in future
+
+    entry = find_fuse_file_entry(cbm, path);
+    if (entry != NULL)
+    {
+        WARN("Request to create file which exists - don't support this");
+        rc = -EEXIST;
+        goto EXIT; 
+    }
+
+    // If we got here the request to create a file is for a new file - so
+    // we can open it.  Use the original path, cos that's what cbm_fuseopen()
+    // expects.
+    // Don't lock cbm_fuseopen will
+    // cbm_fuseopen should set not_yet_on_disk to 1 to indicate to other functions
+    // that this file shouldn't be expected to be on the disk, nor should it
+    // be cleared when the directory is re-read.
 
     rc = cbm_fuseopen(path, fi);
     if (rc)
     {
-        WARN("Failed to open channel to write: %s", path);
+        WARN("Failed to open channel to write: %d %s", rc, path);
         goto EXIT;
     }
 
-    rc = cbm_write(path, "", 0, 0, fi);
-    if (rc)
-    {
-        WARN("Failed to write 0 bytes to new file");
-    }
-
-    // Now re-read directory so file exists! 
-    cbm_create_read_dir_thread(cbm);
+    rc = 0;
 
 EXIT:
 

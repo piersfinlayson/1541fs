@@ -3,7 +3,7 @@
 // Details about dummy files
 
 #define MIN_HANDLE_DUMMY 1
-#define MAX_HANDLE_DUMMY 4
+#define MAX_HANDLE_DUMMY 6
 #define HANDLE_DUMMY_DIR_DOT    1
 #define HANDLE_DUMMY_DIR_DOTDOT 2
 
@@ -20,6 +20,12 @@
 #define CONTENTS_FILE_DISK_REREAD \
     "To force a disk re-read, write anything to this file.  For example:\n" \
     "  echo \"1\" > ./" PATH_FILE_DISK_REREAD "\n"
+
+#define HANDLE_DUMMY_SHOW_LAST_STATUS     5
+#define PATH_SHOW_LAST_STATUS       "show_status.cmd"
+
+#define HANDLE_DUMMY_RECHECK_DRIVE_STATUS     6
+#define PATH_RECHECK_DRIVE_STATUS       "recheck_status.cmd"
 
 struct dummy_entry
 {
@@ -63,6 +69,22 @@ const struct dummy_entry dummies[] =
         PATH_FILE_DISK_REREAD,
         sizeof(CONTENTS_FILE_DISK_REREAD),
         CONTENTS_FILE_DISK_REREAD,
+        NULL,
+    },
+    {
+        HANDLE_DUMMY_SHOW_LAST_STATUS,
+        0,
+        PATH_SHOW_LAST_STATUS,
+        64,
+        NULL,
+        NULL,
+    },
+    {
+        HANDLE_DUMMY_RECHECK_DRIVE_STATUS,
+        0,
+        PATH_RECHECK_DRIVE_STATUS,
+        64,
+        NULL,
         NULL,
     },
     { 0 },
@@ -159,6 +181,7 @@ static int handle_dummy_read(CBM *cbm,
                              struct fuse_file_info *fi)
 {
     int rc = -1;
+    int rc2;
     const struct dummy_entry *dentry;
     (void)cbm;
     (void)entry;
@@ -187,6 +210,25 @@ static int handle_dummy_read(CBM *cbm,
         DEBUG("Request to read from dir %s not supported", dentry->filename);
         rc = -EISDIR;
         goto EXIT;
+    }
+
+    if ((handle == HANDLE_DUMMY_SHOW_LAST_STATUS) ||
+        (handle == HANDLE_DUMMY_RECHECK_DRIVE_STATUS))
+    {
+        // TO DO need to check this will all fit in size!
+        assert(size >= 32);
+        DEBUG("Request to read drive status, size %zu offset %zu", size, offset);
+        if (handle == HANDLE_DUMMY_RECHECK_DRIVE_STATUS)
+        {
+            rc2 = check_drive_status(cbm);
+            (void)rc2;
+        }
+        memcpy(buf, cbm->error_buffer, strlen(cbm->error_buffer));
+        rc = (int)strlen(cbm->error_buffer);
+        buf[rc] = '\n';
+        rc++;
+        goto EXIT;
+
     }
 
     // Copy the correct bit of the file into the buffer
@@ -278,6 +320,12 @@ static int handle_dummy_write(CBM *cbm,
             // This is all we're getting.  A subsequent write will be
             // processed on its own merits
             rc = process_format_request(cbm, buf, size);
+            break;
+
+        case HANDLE_DUMMY_SHOW_LAST_STATUS:
+        case HANDLE_DUMMY_RECHECK_DRIVE_STATUS:
+            // We do not support writing to this file
+            rc = -EROFS;
             break;
 
         default:

@@ -19,19 +19,19 @@ int allocate_free_channel(CBM *cbm,
     // Figure out valid channels based on usage
     switch (usage)
     {
-        case USAGE_READ:
-            min = READ_CHANNEL;
-            max = READ_CHANNEL;
+        case USAGE_LOAD:
+            min = LOAD_CHANNEL;
+            max = LOAD_CHANNEL;
             break;
 
-        case USAGE_WRITE:
-            min = WRITE_CHANNEL;
-            max = WRITE_CHANNEL;
+        case USAGE_SAVE:
+            min = SAVE_CHANNEL;
+            max = SAVE_CHANNEL;
             break;
 
-        case USAGE_CONTROL:
-            min = CTRL_CHANNEL;
-            max = CTRL_CHANNEL;
+        case USAGE_COMMAND:
+            min = COMMAND_CHANNEL;
+            max = COMMAND_CHANNEL;
             break;
 
         case USAGE_OPEN:

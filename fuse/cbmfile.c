@@ -72,17 +72,17 @@ static int load_dir_listing(CBM *cbm, char **buf, size_t *data_len)
     }
     assert(buf_len > 0);
 
-    ch = allocate_free_channel(cbm, USAGE_WRITE, NULL);
+    ch = allocate_free_channel(cbm, USAGE_LOAD, NULL);
     if (ch < 0)
     {
-        WARN("Failed to get WRITE channel as it's already allocated");
+        WARN("Failed to get LOAD channel as it's already allocated");
         rc = -EBUSY;
         goto EXIT;
     }
-    assert(ch == WRITE_CHANNEL);
+    assert(ch == LOAD_CHANNEL);
 
     // Open the directory "file" ($)
-    // This needs to be done using the READ_CHANNEL (channel 1)
+    // This needs to be done using the SAVE_CHANNEL (channel 1)
     // Otherwise the files are not listed - only the header and footer
     // (showing blocks free) will be listed
     DEBUG("Open $");
@@ -306,7 +306,7 @@ static int process_dir_listing(CBM *cbm, char *buffer, size_t data_len)
                 else if (suffix_len < 3)
                 {
                     DEBUG("Add char to suffix: %c", c);
-                    suffix[suffix_len++] = c;
+                    suffix[suffix_len++] = cbm_petscii2ascii_c(c);
                 }
                 else
                 {
@@ -469,24 +469,33 @@ static enum cbm_file_type get_cbm_file_type_from_suffix(const char *suffix)
     if (strlen(suffix) == CBM_ID_LEN)
     {
         // We have a header
+        DEBUG("File type: header");
         type = CBM_DISK_HDR;
     }
     else
     {
-        if (strncmp(SUFFIX_PRG, suffix, CBM_FILE_TYPE_STR_LEN-1))
+        if (!strncmp(SUFFIX_PRG, suffix, CBM_FILE_TYPE_STR_LEN-1) ||
+            !strncmp(SUFFIX_PRG_LOWER, suffix, CBM_FILE_TYPE_STR_LEN-1))
         {
+            DEBUG("File type: PRG");
             type = CBM_PRG;
         }
-        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
+        else if (!strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1) ||
+                 !strncmp(SUFFIX_SEQ_LOWER, suffix, CBM_FILE_TYPE_STR_LEN-1))
         {
+            DEBUG("File type: SEQ");
             type = CBM_SEQ;
         }
-        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
+        else if (!strncmp(SUFFIX_USR, suffix, CBM_FILE_TYPE_STR_LEN-1) ||
+                 !strncmp(SUFFIX_USR_LOWER, suffix, CBM_FILE_TYPE_STR_LEN-1))
         {
+            DEBUG("File type: USR");
             type = CBM_USR;
         }
-        else if (strncmp(SUFFIX_SEQ, suffix, CBM_FILE_TYPE_STR_LEN-1))
+        else if (!strncmp(SUFFIX_REL, suffix, CBM_FILE_TYPE_STR_LEN-1) ||
+                 !strncmp(SUFFIX_REL_LOWER, suffix, CBM_FILE_TYPE_STR_LEN-1))
         {
+            DEBUG("File type: REL");
             type = CBM_REL;
         }
     }
@@ -541,11 +550,6 @@ static int update_cbm_filename_from_fuse(struct cbm_file *entry)
             assert(suffix_len < CBM_FILE_TYPE_STR_LEN);
             strcpy(cbm_suffix, filename+ii+1);
 
-            // Remove the suffix from the filename by NULL terminating at
-            // the delimiter
-            filename[ii] = 0;
-            assert(ii >= 0);
-            filename_len = (size_t)ii;
             break;
         }
         suffix_len++;
@@ -555,10 +559,10 @@ static int update_cbm_filename_from_fuse(struct cbm_file *entry)
     {
         // We found the suffix (i.e. we broke out of the for loop before ii
         // hit -1)
-        // Copy the fileame (which now doesn't have the suffix) into
-        // cbm_filename
+        // Copy the fileame (without suffix) into cbm_filename
         assert(filename_len < MAX_CBM_FILENAME_STR_LEN);
-        strcpy(entry->cbm_filename, filename);
+        strncpy(entry->cbm_filename, filename, (size_t)ii);
+        entry->cbm_filename[ii] = 0;
 
         // Now convert it to PETSCII as that's how we store cbm_filename
         cbm_ascii2petscii(entry->cbm_filename);
@@ -574,6 +578,7 @@ static int update_cbm_filename_from_fuse(struct cbm_file *entry)
         case CBM_SEQ:
         case CBM_USR:
         case CBM_REL:
+            DEBUG("Suffix is PRG, SEQ, USR or REL");
             rc = 0;
             break;
 
@@ -1146,9 +1151,9 @@ struct cbm_file *create_file_entry(CBM *cbm,
             // We've already checked the filename length
             strcpy(entry->fuse_filename, filename);
             rc2 = update_cbm_filename_from_fuse(entry);
-            if (!rc2)
+            if (rc2)
             {
-                DEBUG("Failed to convert fuse filename to CBM %d", rc);
+                DEBUG("Failed to convert fuse filename to CBM %d", rc2);
                 rc = -EPROTO;
                 goto EXIT;
             }

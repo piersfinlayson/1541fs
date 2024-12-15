@@ -84,10 +84,10 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
         // TO DO check 15 not open properly
         assert(!cbm->channel[15].open);
         DEBUG("Formatting disk with cmd: %s", cmd);
-        ch = allocate_free_channel(cbm, USAGE_CONTROL, NULL);
+        ch = allocate_free_channel(cbm, USAGE_COMMAND, NULL);
         if (ch < 0)
         {
-            WARN("Failed to allocate CONTROL channel as it's already allocated");
+            WARN("Failed to allocate COMMAND channel as it's already allocated");
             rc = -EBUSY;
             goto EXIT;
         }
@@ -156,6 +156,10 @@ static int open_file_on_disk(CBM *cbm,
     int ch = -1;
     int rc2;
     int locked = 0;
+    char *rw_suffix;
+    char *type_suffix;
+    char open_filename[MAX_CBM_FILENAME_STR_LEN+4]; // 4 for rw and type suffices
+    int write = 0;
     (void)handle;
 
     ENTRY();
@@ -178,18 +182,49 @@ static int open_file_on_disk(CBM *cbm,
             break;
 
         case CBM_PRG:
+            type_suffix = ",P";
+            break;
+
         case CBM_REL:
+            type_suffix = ",R";
+            break;
+            
         case CBM_USR:
+            type_suffix = ",U";
+            break;
+            
         case CBM_SEQ:
+            type_suffix = ",S";
             break;
 
         default:
+            DEBUG("Unsupported file  type");
             assert(0);
+            goto EXIT;
+            break;
     }
+
+    if ((fi->flags & O_ACCMODE) == O_RDONLY)
+    {
+        DEBUG("Request to open for reading");
+    }
+    else if ((fi->flags & O_ACCMODE) == O_WRONLY)
+    {
+        DEBUG("Request to open for writing");
+        rw_suffix = ",W";
+        write = 1;
+    }
+    else
+    {
+        DEBUG("Neither read nor write - cbm_fuseopen() is broken");
+        assert(0);
+        goto EXIT;
+    }
+
 
     // Allocate a channel to communicate to the drive with
     DEBUG("Allocate free channel");
-    ch = allocate_free_channel(cbm, USAGE_OPEN, entry);
+    ch = allocate_free_channel(cbm, write ? USAGE_SAVE : USAGE_LOAD, entry);
     if (ch < 0)
     {
         WARN("Failed to allocate a free channel to open file: %s",
@@ -199,22 +234,30 @@ static int open_file_on_disk(CBM *cbm,
     }
 
     // Open the file on the disk drive
-    DEBUG("Open file on disk drive using filename: %s", entry->cbm_filename);
+    assert(strnlen(entry->cbm_filename, MAX_CBM_FILENAME_STR_LEN) < MAX_CBM_FILENAME_STR_LEN);
+    strncpy(open_filename, entry->cbm_filename, MAX_CBM_FILENAME_STR_LEN);
+    if (write)
+    {
+        strncat(open_filename, type_suffix, 3);
+        strncat(open_filename, rw_suffix, 3);
+    }
+    assert(strnlen(open_filename, sizeof(open_filename)) < sizeof(open_filename));
+    DEBUG("Open file on disk drive using filename: %s", open_filename);
 
     rc = cbm_open(cbm->fd,
                   cbm->device_num,
                   (unsigned char)ch,
-                  entry->cbm_filename,
-                  strlen(entry->cbm_filename));
+                  open_filename,
+                  strlen(open_filename));
     if (rc)
     {
         rc2 = check_drive_status(cbm);
-        WARN("Failed to open file: %s channel: %d", path, ch);
+        WARN("Failed to open file: %s channel: %d", open_filename, ch);
         WARN("Drive status: %d %s", rc2, cbm->error_buffer);
         goto EXIT;
     }
     
-    DEBUG("Succeeded in opening file: %s channel: %d", entry->cbm_filename, ch);
+    DEBUG("Succeeded in opening file: %s channel: %d", open_filename, ch);
     fi->fh = (long unsigned int)ch;
     rc = 0;
 
@@ -309,7 +352,7 @@ static int release_file_on_disk(CBM *cbm,
     release_channel(cbm, entry->channel->num);
     assert(entry->channel == NULL);
 
-    DEBUG("Succeedding in releasing %s channel %d",
+    DEBUG("Succeeded in releasing %s channel %d",
           entry->fuse_filename,
           ch);
     rc = 0;
@@ -437,19 +480,23 @@ static int read_file_from_disk(CBM *cbm,
         {
             off_t to_read = ((off_t)len - total_read < CBM_BLOCK_SIZE) ? (off_t)len - total_read : CBM_BLOCK_SIZE;
             rc = cbm_raw_read(cbm->fd, temp_buf + total_read, (size_t)to_read);
-            if (rc < 0)
+            if (rc <= 0)
             {
+                // rc == 0 could be valid - there are 0 bytes in file
+                // check drive status to see
                 rc2 = check_drive_status(cbm);
-                (void)rc2;
-                WARN("Hit error reading file %s channel %d", path, channel->num);
-                WARN("Drive status: %d %s", rc, cbm->error_buffer);
-                cbm_untalk(cbm->fd);
-                goto EXIT;
-            }
-            else if (rc == 0)
-            {
-                WARN("Reached end of file for %s channel %d", path, channel->num);
-                break;
+                if ((rc < 0) || rc2)
+                {
+                    WARN("Hit error reading file %s channel %d", path, channel->num);
+                    WARN("Drive status: %d %s", rc, cbm->error_buffer);
+                    cbm_untalk(cbm->fd);
+                    goto EXIT;
+                }
+                else
+                {
+                    WARN("Reached end of file for %s channel %d", path, channel->num);
+                    break;
+                }
             }
             else
             {
@@ -605,22 +652,25 @@ static int write_file_to_disk(struct cbm_state *cbm,
         goto EXIT;
     }
 
+    DEBUG("Write %zu bytes to disk", size);
     rc = cbm_raw_write(cbm->fd, buf, size);
     cbm_unlisten(cbm->fd);
-    if (rc < 0)
+    if (rc <= 0)
     {
-        rc = check_drive_status(cbm);
+        rc2 = check_drive_status(cbm);
         (void)rc;
         WARN("Hit error writing file %s channel %d", path, ch);
         WARN("Drive status: %d %s", rc, cbm->error_buffer);
     }
     else if ((size_t)rc < size)
     {
-        WARN("Couldn't write the whole of file %s channel %d", path, ch);
+        WARN("Couldn't write the whole of file %s channel %d, %d bytes vs %zu bytes", path, ch, rc, size);
         goto EXIT;
     }
 
     DEBUG("Successfully wrote file: %s bytes: %d", path, rc);
+    entry->filesize = rc;
+    update_fuse_stat(entry);
 
 EXIT:
 

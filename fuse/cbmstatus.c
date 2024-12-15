@@ -37,7 +37,7 @@ int check_drive_status_cmd(CBM *cbm, char *cmd)
     // * raw read on channel 15
     // * untalk
     DEBUG("Talk on channel 15");
-    rc = cbm_talk(cbm->fd, cbm->device_num, 15);
+    rc = cbm_talk(cbm->fd, cbm->device_num, COMMAND_CHANNEL);
     if (rc < 0)
     {
         return rc;
@@ -53,6 +53,12 @@ int check_drive_status_cmd(CBM *cbm, char *cmd)
     assert(len < (int)sizeof(cbm->error_buffer));
 
     // Ensure string properly NULL terminated
+    if (len > 0)
+    {
+        // Strip off a single byte cos this seems to return a weird byte
+        // at the end
+        len--;
+    }
     cbm->error_buffer[len] = 0;
     cbm->error_buffer[MAX_ERROR_LENGTH - 1] = 0;
 
