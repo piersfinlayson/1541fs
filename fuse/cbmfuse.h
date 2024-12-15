@@ -429,6 +429,7 @@ extern int create_dummy_entries(CBM *cbm);
 extern int read_dir_from_disk(CBM *cbm);
 extern void destroy_files(CBM *cbm);
 extern struct cbm_file *return_next_free_file_entry(CBM *cbm);
+extern void update_fuse_stat(struct cbm_file *entry);
 extern void free_file_entry(CBM *cbm, struct cbm_file *file);
 extern struct cbm_file *find_file_entry(CBM *cbm,
                                         const char *cbm_filename,

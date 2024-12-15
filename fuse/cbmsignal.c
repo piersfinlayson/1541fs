@@ -67,7 +67,7 @@ static void handle_signal(int signal)
                         else
                         {
                             fclose(file);
-                            DEBUG("FUSE kicked by opening and closing mountpoint")
+                            DEBUG("FUSE kicked by opening and closing mountpoint");
                         }
                         // Now allow fuse_loop() within main() will exit, and
                         // main() will then do remaining cleanup

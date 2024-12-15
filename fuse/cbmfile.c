@@ -644,7 +644,7 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
 // Update FUSE stat information, ready to provide it to FUSE when requested.
 // Does this based on all of the other information in the cbm_file struct,
 // which must be up to date and valid
-static void update_fuse_stat(struct cbm_file *entry)
+void update_fuse_stat(struct cbm_file *entry)
 {
     off_t max_filesize;
 

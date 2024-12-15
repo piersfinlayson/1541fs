@@ -434,12 +434,15 @@ static int read_file_from_disk(CBM *cbm,
         // Remember, len is not the file system - it was our estimate of the 
         // filesize, based on the number of blocks the file took on the disk.
         // If the reading didn't hit an error then we can reasonably assume we
-        // read the whole file - so update the filesize
+        // read the whole file
+        // As we now know the exact size of this file update the filesize,
+        // and also regenerate stat for this file
         DEBUG("Size of file %s channel %d is %lu bytes",
               path,
               channel->num,
               total_read);
         entry->filesize = (unsigned int)total_read;
+        update_fuse_stat(entry);
 
         // Store off the file in the channel handles so we don't need to
         // re-read if the kernel wants more of the file before releasing
