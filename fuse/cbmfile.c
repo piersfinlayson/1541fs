@@ -71,7 +71,10 @@ static int load_dir_listing(CBM *cbm, char **buf, size_t *data_len)
     }
     assert(buf_len > 0);
 
-    // open the directory "file" ($)
+    // Open the directory "file" ($)
+    // This needs to be done using the READ_CHANNEL (channel 1)
+    // Otherwise the files are not listed - only the header and footer
+    // (showing blocks free) will be listed
     DEBUG("Open $");
     c = cbm_ascii2petscii_c('$');
     rc = cbm_open(cbm->fd, cbm->device_num, 0, &c, READ_CHANNEL);
