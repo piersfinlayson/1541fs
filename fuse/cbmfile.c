@@ -671,7 +671,9 @@ void update_fuse_stat(struct cbm_file *entry)
             max_filesize = CBM_BLOCK_SIZE * entry->cbm_blocks; 
             entry->st.st_blocks = (int)((max_filesize + 255) / 256 / 2);
             entry->st.st_blksize = CBM_BLOCK_SIZE;
-            entry->st.st_size = max_filesize;
+            // If filesize is > 0 for a CBM file, we can use this size, as
+            // it was filled in by an actual read
+            entry->st.st_size = entry->filesize ? entry->filesize : max_filesize;
             break;
 
         case CBM_DUMMY_DIR:
@@ -743,7 +745,7 @@ void update_fuse_stat(struct cbm_file *entry)
 //
 // Returns NULL if there are no more free file entries, and it was unable to
 // reallocate memory for files.
-struct cbm_file *get_next_free_file_entry(CBM *cbm)
+static struct cbm_file *get_next_free_file_entry(CBM *cbm)
 {
     struct cbm_file *new_files;
     struct cbm_file *next_file;
