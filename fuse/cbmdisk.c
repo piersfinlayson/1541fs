@@ -163,6 +163,7 @@ static int open_file_on_disk(CBM *cbm,
     (void)handle;
 
     ENTRY();
+    PARAMS("Path %s", path);
 
     assert(cbm != NULL);
     assert(entry != NULL);
@@ -286,6 +287,7 @@ static int release_file_on_disk(CBM *cbm,
     (void)handle;
 
     ENTRY();
+    PARAMS("Path %s", path);
 
     assert(cbm != NULL);
     assert(entry != NULL);
@@ -396,6 +398,7 @@ static int read_file_from_disk(CBM *cbm,
     size_t len;
 
     ENTRY();
+    PARAMS("Path %s size %zu offset %zu", path, size, offset);
 
     // Processing
     // * Checks
@@ -584,6 +587,7 @@ static int write_file_to_disk(struct cbm_state *cbm,
     (void)fi;
 
     ENTRY();
+    PARAMS("Path %s size %zu offset %zu", path, size, offset);
 
     // Processing:
     // * Some checks
