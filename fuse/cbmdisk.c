@@ -107,14 +107,17 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
         rc = cbm_raw_write(cbm->fd, cmd, strlen(cmd));
         cbm_unlisten(cbm->fd);
 
+        // check drive status whatever so we store off any error
+        rc2 = check_drive_status(cbm);
+        (void)rc2;
+
         if (rc != (int)strlen(cmd))
         {
-            rc2 = check_drive_status(cbm);
-            (void)rc2;
             DEBUG("Failed to write entire command: %d %s", rc2, cbm->error_buffer);
             rc = -EIO;
             goto EXIT;
         }
+
     }
     else
     {
@@ -126,6 +129,106 @@ int process_format_request(CBM *cbm, const char *buf, size_t size)
     cbm_create_read_dir_thread(cbm);
 
     DEBUG("Format successful");
+    rc = (int)size;
+
+EXIT:
+
+    if (drive_open)
+    {
+        assert(ch >= 0);
+        cbm_close(cbm->fd, cbm->device_num, (unsigned char)ch);
+    }
+
+    if (ch >= 0)
+    {
+        release_channel(cbm, ch);
+    }
+
+    EXIT();
+
+    return rc;
+}
+
+int process_exec_command(CBM *cbm, const char *buf, size_t size)
+{
+    int rc = -1;
+    int rc2;
+    int ch = -1;
+    int drive_open = 0;
+    char cmd[MAX_CMD_LEN+1];
+
+    ENTRY();
+
+    if (size == 0)
+    {
+        // Don't execute a command
+        WARN("Kernel wrote 0 bytes to exec command");
+        rc = 0;
+        goto EXIT;
+    }
+    
+    // Buf may not be NULL terminated - turn into a string
+    // By memsetting to 0 and checking size above we can guarantee
+    // this is NULL terminated
+    memset(cmd, 0, MAX_CMD_LEN+1);
+    memcpy(cmd, buf, size);
+    int ii;
+    for (ii = (int)(size-1); ii >= 0; ii--)
+    {
+        if ((cmd[ii] == '\r') || (cmd[ii] == '\n'))
+        {
+            cmd[ii] = 0;
+        }
+        else
+        {
+            // Only go as far back as 1st none new line char
+            break;
+        }
+    }
+
+    // turn into PETSCII
+    cbm_ascii2petscii(cmd);
+
+    ch = allocate_free_channel(cbm, USAGE_COMMAND, NULL);
+    if (ch < 0)
+    {
+        WARN("Failed to allocate COMMAND channel as it's already allocated");
+        rc = -EBUSY;
+        goto EXIT;
+    }
+    rc = cbm_open(cbm->fd, 
+                    cbm->device_num,
+                    (unsigned char)ch,
+                    NULL,
+                    0);
+    if (rc)
+    {
+        rc2 = check_drive_status(cbm);
+        (void)rc2;
+        WARN("Failed to open command channel: %d %s", rc, cbm->error_buffer);
+        goto EXIT;
+    }
+    cbm_listen(cbm->fd, cbm->device_num, (unsigned char)ch);
+    DEBUG("Execute command: %s", cmd);
+    rc = cbm_raw_write(cbm->fd, cmd, strlen(cmd));
+    cbm_unlisten(cbm->fd);
+
+    // Check this whether it worked or not - so we have updated the status
+    rc2 = check_drive_status(cbm);
+    (void)rc2;
+
+    if (rc != (int)strlen(cmd))
+    {
+        DEBUG("Failed to write entire command: %d %s", rc2, cbm->error_buffer);
+        rc = -EIO;
+        goto EXIT;
+    }
+
+    // Force directory reread
+    cbm->dir_is_clean = 0;
+    cbm_create_read_dir_thread(cbm);
+
+    DEBUG("Executed command successfully");
     rc = (int)size;
 
 EXIT:
@@ -483,11 +586,14 @@ static int read_file_from_disk(CBM *cbm,
         {
             off_t to_read = ((off_t)len - total_read < CBM_BLOCK_SIZE) ? (off_t)len - total_read : CBM_BLOCK_SIZE;
             rc = cbm_raw_read(cbm->fd, temp_buf + total_read, (size_t)to_read);
+
+            // check drive status whatever so we store off any error
+            rc2 = check_drive_status(cbm);
+
             if (rc <= 0)
             {
                 // rc == 0 could be valid - there are 0 bytes in file
                 // check drive status to see
-                rc2 = check_drive_status(cbm);
                 if ((rc < 0) || rc2)
                 {
                     WARN("Hit error reading file %s channel %d", path, channel->num);
@@ -518,7 +624,7 @@ static int read_file_from_disk(CBM *cbm,
               channel->num,
               total_read);
         entry->filesize = (unsigned int)total_read;
-        update_fuse_stat(entry);
+        update_fuse_stat(entry, NULL);
 
         // Store off the file in the channel handles so we don't need to
         // re-read if the kernel wants more of the file before releasing
@@ -659,9 +765,13 @@ static int write_file_to_disk(struct cbm_state *cbm,
     DEBUG("Write %zu bytes to disk", size);
     rc = cbm_raw_write(cbm->fd, buf, size);
     cbm_unlisten(cbm->fd);
+
+    // check drive status whatever so we store off any error
+    rc2 = check_drive_status(cbm);
+    (void)rc2;
+
     if (rc <= 0)
     {
-        rc2 = check_drive_status(cbm);
         (void)rc;
         WARN("Hit error writing file %s channel %d", path, ch);
         WARN("Drive status: %d %s", rc, cbm->error_buffer);
@@ -674,7 +784,7 @@ static int write_file_to_disk(struct cbm_state *cbm,
 
     DEBUG("Successfully wrote file: %s bytes: %d", path, rc);
     entry->filesize = rc;
-    update_fuse_stat(entry);
+    update_fuse_stat(entry, NULL);
 
 EXIT:
 

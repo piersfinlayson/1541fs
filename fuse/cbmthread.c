@@ -35,10 +35,12 @@ static void *read_dir_from_disk_thread_func(void *vargp)
 // suspects the directory contents have changed.
 void cbm_create_read_dir_thread(CBM *cbm)
 {
+    ENTRY();
     pthread_t thread_id;
     pthread_create(&thread_id,
                     NULL,
                     read_dir_from_disk_thread_func,
                     (void *)cbm);
+    EXIT();
 }
 

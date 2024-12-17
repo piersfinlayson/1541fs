@@ -58,8 +58,14 @@ extern int current_log_level;
 
 // Various return string prefixes from Commdore DOS
 #define DOS_OK_PREFIX "00"        // OK
+#define DOS_FS_PREFIX "01"        // OK (files scratched)
 #define DOS_BOOT_PREFIX "73,CBM"  // When drive has just powered up/reset
 #define MAX_ERROR_LENGTH 48
+
+// Define this here so the status query can update the filesize with the 
+// last error code
+#define GET_LAST_STATUS_CMD       "get_last_status.cmd"
+#define GET_LAST_ERROR_CMD        "get_last_error.cmd"
 
 // When allocating buffers for reading data, etc, allocate this much memory
 // to being with, and if it's not enough use this as an increment to use to
@@ -100,6 +106,9 @@ extern int current_log_level;
 #define MAX_HEADER_LEN   16+1+2+1 // 16 chars + 1 for comma + 2 for ID + 1 null terminator
 #define MAX_FILE_LEN     16
 #define CBM_ID_LEN       2
+
+// Max length of a command we will send to the disk drive - an arbitary value
+#define MAX_CMD_LEN      64
 
 #define DELIM_FILE  '.'
 #define DELIM_HDR   ','
@@ -348,6 +357,11 @@ typedef struct cbm_state
     // etc.  Note may or may not be spaces after commas.
     char error_buffer[MAX_ERROR_LENGTH];
 
+    // This is subtly different to error_buffer - this indicates the last
+    // error string the drive returned which was actually an error - e.g
+    // not 00 or 01.  It would include 73.
+    char last_error[MAX_ERROR_LENGTH];
+
     // Whether we succeeded in doing a successfully read of the floppy disk's
     // directory last time around - and hence whether the data in dir_entries
     // is valid.  Can be used to avoid requerying the physical media if we
@@ -408,6 +422,7 @@ extern void release_channel(CBM *cbm, int ch);
 
 // cbmdisk.c
 extern int process_format_request(CBM *cbm, const char *buf, size_t size);
+extern int process_exec_command(CBM *cbm, const char *buf, size_t size);
 extern struct callbacks disk_cbs;
 
 // cbmdummy.c
@@ -417,7 +432,7 @@ extern int create_dummy_entries(CBM *cbm);
 extern int read_dir_from_disk(CBM *cbm);
 extern void destroy_files(CBM *cbm);
 extern struct cbm_file *return_next_free_file_entry(CBM *cbm);
-extern void update_fuse_stat(struct cbm_file *entry);
+extern void update_fuse_stat(struct cbm_file *entry, time_t *override_time);
 extern void free_file_entry(CBM *cbm, struct cbm_file *file);
 extern struct cbm_file *find_file_entry(CBM *cbm,
                                         const char *cbm_filename,

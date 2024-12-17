@@ -12,6 +12,9 @@ int check_drive_status_cmd(CBM *cbm, char *cmd)
 {
     int rc;
     int len;
+    int status;
+    struct cbm_file *entry;
+    time_t now;
 
     // Channel 15 will already be open if something was using it
     // It will call this function if it hits an error.  Therefore we're
@@ -43,6 +46,7 @@ int check_drive_status_cmd(CBM *cbm, char *cmd)
         return rc;
     }
     DEBUG("Read");
+    now = time(NULL);
     len = cbm_raw_read(cbm->fd, cbm->error_buffer, sizeof(cbm->error_buffer)-1);
     DEBUG("Untalk");
     cbm_untalk(cbm->fd);
@@ -64,13 +68,56 @@ int check_drive_status_cmd(CBM *cbm, char *cmd)
 
     DEBUG("Exiting check status: %d %s", len, cbm->error_buffer);
 
-    // Both 00,OK and 73,CBM ... are OK responses
+    // Both 00,OK 01, FILES SCRATCHED and 73,CBM ... are OK responses
     // Anything else is considered an error
     rc = -1;
-    if (!strncmp(cbm->error_buffer, DOS_OK_PREFIX, strlen(DOS_OK_PREFIX)) ||
-        !strncmp(cbm->error_buffer, DOS_BOOT_PREFIX, strlen(DOS_BOOT_PREFIX)))
+    if (!strncmp(cbm->error_buffer,
+                 DOS_OK_PREFIX,
+                 strlen(DOS_OK_PREFIX)) ||
+        !strncmp(cbm->error_buffer,
+                 DOS_FS_PREFIX,
+                 strlen(DOS_FS_PREFIX)) ||
+        !strncmp(cbm->error_buffer,
+                 DOS_BOOT_PREFIX,
+                 strlen(DOS_BOOT_PREFIX)))
     {
         rc = 0;
+    }
+
+    // Store off the last error code.  Here 00 and 01 are not errors, but 73
+    // is considered an error
+    if (strncmp(cbm->error_buffer,
+                 DOS_OK_PREFIX,
+                 strlen(DOS_OK_PREFIX)) &&
+        strncmp(cbm->error_buffer,
+                 DOS_FS_PREFIX,
+                 strlen(DOS_FS_PREFIX)))
+    {
+        strcpy(cbm->last_error, cbm->error_buffer);
+    }
+
+    // Get the error status as an integer
+    status = atoi(cbm->error_buffer);
+    status += 100;
+    assert(status >= 0);
+    entry = find_fuse_file_entry(cbm, GET_LAST_STATUS_CMD);
+    if (entry != NULL)
+    {
+        // Update the get current status command filesize with the error code
+        entry->filesize = status;
+        update_fuse_stat(entry, &now);
+    }
+
+    // Codes above (100+) 00 and 01 considered error for last_error:
+    if (status > 101)
+    {
+        entry = find_fuse_file_entry(cbm, GET_LAST_ERROR_CMD);
+        if (entry != NULL)
+        {
+            // Update the get current status command filesize with the error code
+            entry->filesize = status;
+            update_fuse_stat(entry, &now);
+        }
     }
 
     return rc;

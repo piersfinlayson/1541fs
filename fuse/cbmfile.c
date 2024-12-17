@@ -121,11 +121,14 @@ static int load_dir_listing(CBM *cbm, char **buf, size_t *data_len)
     rc = cbm_untalk(cbm->fd);
     if (rc)
     {
-        rc2 = check_drive_status(cbm);
         DEBUG("Hit error reading $ from disk %d", rc);
         DEBUG("Drive status %d %s", rc2, cbm->error_buffer);
         goto EXIT;
     }
+
+    // Check drive status anyway just in case something to see
+    rc2 = check_drive_status(cbm);
+    (void)rc2;
 
     *buf = buffer;
 
@@ -667,7 +670,9 @@ static void update_fuse_filename_from_cbm(struct cbm_file *entry)
 // Update FUSE stat information, ready to provide it to FUSE when requested.
 // Does this based on all of the other information in the cbm_file struct,
 // which must be up to date and valid
-void update_fuse_stat(struct cbm_file *entry)
+// If override_time is non NULL it will override our regular time processing
+// and set all of the stat times to override_time
+void update_fuse_stat(struct cbm_file *entry, time_t *override_time)
 {
     off_t max_filesize;
 
@@ -734,25 +739,33 @@ void update_fuse_stat(struct cbm_file *entry)
     }
 
     // Set timestamps - we leave dummy files with 0 timestamps, and actual
-    // files on the disk (but not the file representing the header) as now.
-    switch (entry->type)
+    // files on the disk (and the header) as now.
+    if (override_time == NULL)
     {
-        case CBM_PRG:
-        case CBM_SEQ:
-        case CBM_REL:
-        case CBM_USR:
-            entry->st.st_atime = entry->st.st_ctime = entry->st.st_mtime = time(NULL);
-            break;
+        switch (entry->type)
+        {
+            case CBM_PRG:
+            case CBM_SEQ:
+            case CBM_REL:
+            case CBM_USR:
+            case CBM_DISK_HDR:
+                entry->st.st_atime = entry->st.st_ctime = entry->st.st_mtime = time(NULL);
+                break;
 
-        case CBM_DISK_HDR:
-        case CBM_DUMMY_FILE:
-        case CBM_DUMMY_DIR:
-            // Do nothing - already set to 0.
-            break;
+            case CBM_DUMMY_FILE:
+            case CBM_DUMMY_DIR:
+                // Do nothing - already set to 0.
+                break;
 
-        default:
-            assert(0);
-            break;
+            default:
+                assert(0);
+                break;
+        }
+    }
+    else
+    {   
+        DEBUG("Setting time to override time");
+        entry->st.st_atime = entry->st.st_ctime = entry->st.st_mtime = *override_time;
     }
 
     EXIT();
@@ -1195,7 +1208,7 @@ struct cbm_file *create_file_entry(CBM *cbm,
     }
 
     // Set stat, ready to be provided to FUSE when requested
-    update_fuse_stat(entry);
+    update_fuse_stat(entry, NULL);
 
     // Set the callbacks - may be NULL in which case that function won't be
     // supported for this file, and FUSE operations will be rejected
