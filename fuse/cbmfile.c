@@ -49,7 +49,7 @@ static void *realloc_buffer(char *buffer,
 static int load_dir_listing(CBM *cbm, char **buf, size_t *data_len)
 {
     int rc = 1;
-    int rc2;
+    int rc2 = 0;
     char *buffer;
     size_t buf_len;
     size_t pos;
@@ -160,7 +160,7 @@ static int process_dir_listing(CBM *cbm, char *buffer, size_t data_len)
 {
     int rc = 1;
     size_t pos;
-    int line_count;
+    int line_count = 0;
 
     ENTRY();
 
