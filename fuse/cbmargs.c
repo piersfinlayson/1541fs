@@ -177,7 +177,7 @@ int process_args(struct fuse_args *args, CBM *cbm)
         printf("    -d|--device <device_num=8|9|10|11>  set device number (default: 8)\n");
         printf("    -b|--bus-reset         force a bus (IEC/IEEE-488) reset before mount\n");
         printf("    -u|--dummy-formats     don't actually format the disk if requested\n");
-        printf("    -z|--daemonize         daemonize (after initialization has completed)");
+        printf("    -z|--daemonize         daemonize (after initialization has completed)\n");
         printf("    -?|-h|--help           show help\n");
         printf("    --version              show version\n");
         fuse_lib_help(args);
